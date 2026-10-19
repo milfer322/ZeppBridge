@@ -1,6 +1,6 @@
 # ZeppBridge Web (Docker) ⌚🌐
 
-> **Fork autónomo de [ZeppBridge](https://github.com/lingcang728/ZeppBridge) adaptado para funcionar 100% a través del navegador web, sin necesidad de instalar la aplicación de escritorio.**
+> **Fork autónomo de [ZeppBridge](https://github.com/lingcang728/ZeppBridge) (actualizado y sincronizado a la última versión oficial v3.0.3) adaptado para funcionar 100% a través del navegador web, sin necesidad de instalar la aplicación de escritorio.**
 
 Permite alojar tu propio servidor personal de sincronización y análisis de salud de **Amazfit / Zepp** en cualquier máquina con Docker (servidor local, NAS Unraid, Synology, Raspberry Pi, VPS o mini PC) y acceder a toda tu información deportiva y biomédica desde cualquier dispositivo (ordenador, móvil o tablet) simplemente abriendo una URL en tu navegador web.
 
@@ -94,4 +94,5 @@ Toda la información personal (base de datos SQLite `zepp.db`, tokens de acceso 
 ## ⚖️ Licencia y Reconocimientos
 
 Este proyecto es un fork y extensión para la web de **[ZeppBridge](https://github.com/lingcang728/ZeppBridge)** por `lingcang728`.
+Se encuentra actualizado con la última versión de su creador original (**v3.0.3** / `main`, incorporando todas las mejoras de `v3.0.2` y el planificador de entrenamientos).
 Distribuido bajo la misma licencia de código abierto que el proyecto original.
