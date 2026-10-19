@@ -82,6 +82,9 @@ Toda la información personal (base de datos SQLite `zepp.db`, tokens de acceso 
 
 ## 🔒 Privacidad y Seguridad
 
+> [!WARNING]
+> **Sin sistema de autenticación integrado:** ZeppBridge Web fue diseñado para entornos de red local doméstica y **no cuenta con pantalla de inicio de sesión ni protección por contraseña de fábrica**. Si planeas exponer el puerto del contenedor a internet o acceder desde el exterior, es **imprescindible colocarlo detrás de un Reverse Proxy con autenticación** (por ejemplo, [Nginx Proxy Manager](https://nginxproxymanager.com/) con Basic Auth / Authelia / Authentik, [Cloudflare Zero Trust Tunnels](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/), [Traefik](https://traefik.io/), [Caddy](https://caddyserver.com/), o accediendo únicamente a través de una VPN privada como Tailscale o WireGuard).
+
 * **Tus datos nunca salen de tu red:** La base de datos SQLite y las credenciales permanecen exclusivamente en tu servidor.
 * **Sin telemetría oculta:** No se envían datos a servidores de terceros que no hayas configurado explícitamente (como tu propio bot de Telegram o tu propia clave de Google Gemini para los informes).
 * **Fácil de respaldar:** Basta con guardar la carpeta `./config` para tener un duplicado exacto de todo tu historial.
