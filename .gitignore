@@ -1,0 +1,56 @@
+# Entorno y credenciales locales (¡NUNCA subir a GitHub!)
+.env
+.env.local
+.env.*.local
+
+# Datos de persistencia de Docker, base de datos de salud y credenciales de usuario
+config/
+config/*
+data/
+data/*
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+auth.json
+*.auth.json
+user_prefs.json
+custom_config.json
+reports.json
+ai_tasks.json
+training_plan_state.json
+
+# Logs y volcados
+*.log
+logs/
+*.dump
+backups/
+*.bak
+*.tmp
+
+# Python y caché
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+
+# Node y Frontend
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# IDE y Sistema Operativo
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace

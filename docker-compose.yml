@@ -1,0 +1,21 @@
+services:
+  zeppbridge:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - ZEPPBRIDGE_VERSION=3.0.2
+        - ZEPPBRIDGE_GIT_REF=main
+    image: zeppbridge:web-native
+    container_name: zeppbridge
+    restart: unless-stopped
+    environment:
+      - TZ=Europe/Madrid
+      - ZEPPBRIDGE_DATA_DIR=/data
+      - ZEPPBRIDGE_CREDENTIAL_STORE=file
+    ports:
+      # Puerto de acceso a la Web App nativa (120+ FPS en tu navegador)
+      - "${ZEPP_PORT:-27480}:8000"
+    volumes:
+      # Persistencia de la base de datos (zepp.db), auth.json y respaldos
+      - ./config:/data
