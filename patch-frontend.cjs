@@ -93,6 +93,7 @@ const runResult = ref<{ id: string; ok: boolean; message: string } | null>(null)
 
 // Modal para crear / editar informe
 const showModal = ref(false);
+const showDiffs = ref(true);
 const editReport = ref<any>({
   id: '',
   name: '',
@@ -925,6 +926,73 @@ onMounted(() => {
       </div>
     </section>
 
+    <!-- SECCIÓN: COMPARATIVA Y DIFERENCIAS RESPECTO AL ORIGINAL -->
+    <section class="s-section">
+      <div class="s-section-head" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
+        <div>
+          <h3>✨ Diferencias y Mejoras frente a la Versión Original</h3>
+          <p class="s-row-sub" style="margin: 2px 0 0 0;">Comparativa de arquitectura, funciones añadidas y mejoras de este fork respecto al ZeppBridge oficial.</p>
+        </div>
+        <button class="pill-button" type="button" @click="showDiffs = !showDiffs">
+          <Icon name="spark" :size="13" /> {{ showDiffs ? 'Ocultar Comparativa' : 'Ver Comparativa' }}
+        </button>
+      </div>
+
+      <div v-if="showDiffs" class="s-list" style="margin-top: 12px; overflow-x: auto;">
+        <table class="diff-table">
+          <thead>
+            <tr>
+              <th style="min-width: 140px;">Módulo / Característica</th>
+              <th style="min-width: 220px;">ZeppBridge Original (Tauri Desktop)</th>
+              <th style="min-width: 260px;">ZeppBridge Web (Este Fork Docker)</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>🌐 Plataforma y Acceso</strong></td>
+              <td>Aplicación nativa de escritorio (Rust / Tauri). Requiere instalación en local en cada PC/Mac cliente.</td>
+              <td><span class="diff-tag plus">Web SPA</span> 100% en navegador web para cualquier dispositivo (PC, móvil, tablet) corriendo en Docker.</td>
+            </tr>
+            <tr>
+              <td><strong>🔄 Sincronización Automática</strong></td>
+              <td>Solo sincroniza cuando la aplicación de escritorio está abierta en primer/segundo plano en el PC.</td>
+              <td><span class="diff-tag plus">Servicio 24/7</span> Sincronización continua en segundo plano en el servidor con intervalo configurable (5m por defecto).</td>
+            </tr>
+            <tr>
+              <td><strong>🤖 Bot de Telegram Interactivo</strong></td>
+              <td>No disponible.</td>
+              <td><span class="diff-tag plus">Interactivo</span> Control bidireccional desde Telegram en tu móvil: <code>/hoy</code>, <code>/buenosdias</code>, <code>/sync</code>, <code>/pulso</code>, <code>/informe</code>.</td>
+            </tr>
+            <tr>
+              <td><strong>📋 Informes Automáticos (Cron + IA)</strong></td>
+              <td>Solo consultas puntuales manuales en pantalla.</td>
+              <td><span class="diff-tag plus">Motor Cron</span> Informes programables periódicos (diarios, semanales) y reporte matutino al despertar con Google Gemini.</td>
+            </tr>
+            <tr>
+              <td><strong>🕒 Horario y Formato de Fechas</strong></td>
+              <td>Horario de 12 horas (AM/PM) y formato de fecha americano (MM/DD) por defecto.</td>
+              <td><span class="diff-tag plus">Adaptación Europea</span> <strong>24 horas (00:00 - 23:59)</strong> y formato <strong>Día/Mes (DD/MM)</strong> fijados por defecto en toda la app y gráficas.</td>
+            </tr>
+            <tr>
+              <td><strong>💓 Métricas Cardíacas con IA</strong></td>
+              <td>Plantillas genéricas para sueño, semana y workout.</td>
+              <td><span class="diff-tag plus">Intents Especiales</span> Análisis cardiovascular dedicado de 7d y 30d (HRV, pulso en reposo y zonas de esfuerzo).</td>
+            </tr>
+            <tr>
+              <td><strong>💾 Respaldos y Exportación</strong></td>
+              <td>Archivos SQLite en directorios internos del sistema operativo.</td>
+              <td><span class="diff-tag plus">Descarga en 1 Clic</span> Backups directos de la base de datos (<code>.db</code>), restauración y exportador a CSV para Excel.</td>
+            </tr>
+            <tr>
+              <td><strong>🏃 Entrenamientos y Actividades GPS</strong></td>
+              <td>Integrado en la última versión v3.0.3.</td>
+              <td><span class="diff-tag same">100% Sincronizado</span> Mantiene el planificador de entrenamientos semanales, intervalos y carga TLB en la web.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
     <!-- MODAL PARA CREAR O EDITAR INFORME -->
     <div v-if="showModal" class="modal-overlay">
       <div class="modal-box">
@@ -1069,7 +1137,13 @@ onMounted(() => {
 
 .alert { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 6px; font-size: 13px; margin-top: 8px; }
 .alert.success { background: rgba(109, 213, 140, 0.12); color: #6dd58c; border: 1px solid rgba(109, 213, 140, 0.3); }
-.alert.danger { background: rgba(255, 180, 171, 0.12); color: #ffb4ab; border: 1px solid rgba(255, 180, 171, 0.3); }
+.diff-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.diff-table th, .diff-table td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--mat-line, #333538); vertical-align: middle; }
+.diff-table th { background: #141517; color: var(--ink, #e2e2e6); font-weight: 600; font-size: 12px; }
+.diff-table tr:hover { background: rgba(255, 255, 255, 0.02); }
+.diff-tag { display: inline-block; font-size: 10px; font-weight: 700; padding: 2px 6px; border-radius: 4px; margin-right: 6px; }
+.diff-tag.plus { background: rgba(109, 213, 140, 0.2); color: #6dd58c; border: 1px solid rgba(109, 213, 140, 0.4); }
+.diff-tag.same { background: rgba(147, 197, 253, 0.2); color: #93c5fd; border: 1px solid rgba(147, 197, 253, 0.4); }
 </style>
 `;
   fs.writeFileSync(customSectionVue, customSectionContent, 'utf8');

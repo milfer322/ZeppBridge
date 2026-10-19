@@ -28,6 +28,9 @@ El proyecto original de ZeppBridge es una aplicación de escritorio basada en Ta
 * ☀️ **Informe Matutino Automático:** Recibe cada mañana un resumen motivacional de cómo ha ido tu sueño antes de levantarte.
 * 🔄 **Auto-Sync en Segundo Plano:** Sincronización incremental periódica configurable (por defecto cada 5 minutos).
 * 💾 **Respaldos de Base de Datos y Exportación CSV:** Copia de seguridad en 1 clic de tu base de datos SQLite y exportación de sesiones a formato CSV.
+* ✨ **Módulo Integrado de Diferencias:** Panel visual en Configuración y documentación completa para consultar en cualquier momento todas las diferencias arquitectónicas y funcionales respecto al ZeppBridge oficial.
+
+> 📖 **Comparativa Detallada:** Consulta la guía **[DIFFERENCES.md](file:///a:/dockers_customs/zeppbridge/DIFFERENCES.md)** para ver la tabla comparativa exhaustiva, diagramas de arquitectura y desglose de novedades frente a la app de escritorio original.
 
 ---
 
