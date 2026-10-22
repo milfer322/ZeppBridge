@@ -113,6 +113,11 @@ flowchart TD
 * Función para restaurar una base de datos directamente desde el navegador web.
 * Exportación de entrenamientos y métricas diarias a formato `.csv` compatible con Excel y Google Sheets.
 
+### 6. Métricas Reales en Estado de Entrenamiento (Training Load, Balance TLB y Zonas de FC)
+* **Carga de Entrenamiento y Ratio Agudo:Crónico (TLB):** Zepp no registra la carga de entrenamiento en `daily_metrics`, sino por sesión en `workouts`. El fork calcula automáticamente el histórico móvil de fatiga (7 días), fitness (28 días) y ratio de carga para mostrar el estado de equilibrio de entrenamiento real.
+* **Zonas de Frecuencia Cardíaca Dinámicas:** En la versión base las zonas de FC (`/training`) estaban fijadas con 0 segundos y límites estáticos. Este fork calcula los umbrales personalizados según tu frecuencia máxima real (Zonas 1 a 5) y computa el tiempo real invertido en cada zona a partir de las muestras de entrenamiento (`workout_samples`) y registros de pulso.
+* **Compatibilidad Universal con Portapapeles:** Polyfill para copia segura en entornos web HTTP / no-HTTPS, evitando errores de `writeText`.
+
 ---
 
 ## 🔄 Compatibilidad con el Proyecto Upstream
