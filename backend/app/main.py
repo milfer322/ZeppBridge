@@ -2358,6 +2358,89 @@ async def handle_bridge_command(command: str, request: Request):
     elif command in ("update_apply", "updates::silent::update_apply"):
         return None
 
+    elif command == "update_set_auto":
+        return True
+
+    # --------------------------------------------------------------------------
+    # 14. Novedades v3.0.5+: Rings, Logbook (PB, Zapatillas, Carreras), Coach & Cartas
+    # --------------------------------------------------------------------------
+    elif command == "annual_rings":
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        return {
+            "years": [],
+            "today": today_str
+        }
+
+    elif command == "rings_save_image":
+        return "/data/exports/rings.png"
+
+    elif command == "personal_records":
+        return {
+            "records": [],
+            "runs_scanned": 0
+        }
+
+    elif command == "shoes_overview":
+        return {
+            "shoes": [],
+            "unknown_gear": []
+        }
+
+    elif command in ("shoe_save", "shoe_delete", "race_save", "race_delete", "injury_save", "injury_delete", "save_life_event", "delete_life_event"):
+        return True
+
+    elif command in ("races_list", "injuries_list", "list_life_events"):
+        return []
+
+    elif command == "workout_feel_get":
+        wid = body.get("workoutId") or body.get("workout_id") or ""
+        return {
+            "workout_id": wid,
+            "rpe": None,
+            "soreness": [],
+            "shoe_mode": "none",
+            "shoe_id": None,
+            "watch_rpe": None,
+            "footwear": None,
+            "assigned": None,
+            "choices": []
+        }
+
+    elif command in ("workout_feel_save", "workout_feedback_save", "workout_feedback_dismiss", "workout_feedback_snooze", "workout_feedback_adjusted"):
+        return True
+
+    elif command == "workout_feedback_get":
+        return None
+
+    elif command == "workout_feedback_prompt":
+        return ""
+
+    elif command in ("coach_notes_list", "coach_notes_export"):
+        return []
+
+    elif command in ("coach_note_add", "coach_note_decide", "coach_note_edit", "coach_note_delete"):
+        return True
+
+    elif command in ("letters_state", "letters_sync"):
+        return {
+            "outbox": [],
+            "sent": [],
+            "receipts": [],
+            "receipts_checked_at": None
+        }
+
+    elif command == "letters_send_reply":
+        return {
+            "status": "sent",
+            "reply_id": "rep_1",
+            "view": {
+                "outbox": [],
+                "sent": [],
+                "receipts": [],
+                "receipts_checked_at": None
+            }
+        }
+
     # --------------------------------------------------------------------------
     # 13. Preferencias, Diagnósticos, Exportaciones y Mantenimiento
     # --------------------------------------------------------------------------

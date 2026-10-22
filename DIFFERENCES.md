@@ -19,7 +19,7 @@ Este documento describe detalladamente las diferencias arquitectónicas, de infr
 | **Formato de Fechas** | Formato americano Mes/Día (MM/DD) en varias vistas y gráficas. | **Formato europeo/español Día/Mes (DD/MM)** aplicado en todas las gráficas, tablas y tooltips. |
 | **Análisis Cardíaco Especializado** | Solo plantillas genéricas de sueño y workout. | **Nuevos intents de IA:** Módulos dedicados para 💓 Pulsaciones (7 días) y 📈 Cardio (30 días) evaluando HRV y RHR. |
 | **Gestión de Respaldos (Backups)** | Base de datos SQLite guardada en carpetas del sistema operativo del usuario. | **Descarga de backup `.db` en 1 clic**, restauración directa desde la interfaz y exportador CSV para Excel. |
-| **Planificador de Entrenamientos** | Añadido en v3.0.3 en rama principal upstream. | **Totalmente preservado y sincronizado:** Soporta el diseñador de intervalos y carga de entrenamiento TLB. |
+| **Planificador de Entrenamientos y Novedades Upstream** | Añadido en v3.0.3 - v3.0.6 en rama principal upstream. | **Totalmente preservado y sincronizado:** Soporta el diseñador de intervalos, retrospectiva de anillos, diario deportivo, deportes ampliados (#143) y carga TLB. |
 
 ---
 
@@ -118,5 +118,5 @@ flowchart TD
 ## 🔄 Compatibilidad con el Proyecto Upstream
 
 Este fork mantiene una sincronización estricta con las versiones oficiales de `lingcang728/ZeppBridge`:
-* **Versión Base Sincronizada:** **v3.0.3** (rama `main` con release `v3.0.2` + actualizaciones del planificador de entrenamientos).
+* **Versión Base Sincronizada:** **v3.0.6** (release oficial **v3.0.5** y rama `main` upstream, incorporando deportes adicionales #143, canal avanzado de distancias, retrospectiva anual de anillos y diario de actividad).
 * Los parches se aplican de forma no destructiva mediante `patch-frontend.cjs` durante el proceso de construcción de la imagen de Docker, lo que garantiza que cualquier corrección o nueva función añadida por el autor original pueda incorporarse sin romper la funcionalidad web.

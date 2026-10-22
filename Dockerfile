@@ -3,7 +3,7 @@
 # ==============================================================================
 FROM node:22-bookworm-slim AS frontend-builder
 
-ARG ZEPPBRIDGE_VERSION=3.0.2
+ARG ZEPPBRIDGE_VERSION=3.0.5
 ARG ZEPPBRIDGE_GIT_REF=main
 
 WORKDIR /src
@@ -37,7 +37,7 @@ FROM python:3.11-slim-bookworm
 LABEL maintainer="antigravity"
 LABEL description="ZeppBridge Web Nativo - Frontend oficial desacoplado con FastAPI y CLI oficial"
 
-ARG ZEPPBRIDGE_VERSION=3.0.2
+ARG ZEPPBRIDGE_VERSION=3.0.5
 
 WORKDIR /app
 
@@ -55,8 +55,8 @@ RUN set -eux && \
     # Descargar zeppbridge-tools oficial (CLI y MCP en Rust compilado)
     TEMP_DIR=$(mktemp -d) && \
     cd "$TEMP_DIR" && \
-    curl -fsSL -o tools.zip \
-        "https://github.com/lingcang728/ZeppBridge/releases/download/v${ZEPPBRIDGE_VERSION}/zeppbridge-tools-${ZEPPBRIDGE_VERSION}-x86_64-unknown-linux-gnu.zip" && \
+    (curl -fsSL -o tools.zip "https://github.com/lingcang728/ZeppBridge/releases/download/v${ZEPPBRIDGE_VERSION}/zeppbridge-tools-${ZEPPBRIDGE_VERSION}-Linux-x64.zip" || \
+     curl -fsSL -o tools.zip "https://github.com/lingcang728/ZeppBridge/releases/download/v${ZEPPBRIDGE_VERSION}/zeppbridge-tools-${ZEPPBRIDGE_VERSION}-x86_64-unknown-linux-gnu.zip") && \
     unzip -q tools.zip -d /usr/local/bin/ && \
     chmod +x /usr/local/bin/zeppbridge-* && \
     rm -rf "$TEMP_DIR" && \

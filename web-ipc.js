@@ -134,8 +134,8 @@
         location.reload();
         return null;
       }
-      if (command.includes('plugin:updater')) {
-        return { shouldUpdate: false };
+      if (command.includes('plugin:updater') || command.startsWith('update_')) {
+        return { shouldUpdate: false, phase: 'up_to_date' };
       }
       if (command === 'system_region_locale') {
         return navigator.language || 'es-ES';

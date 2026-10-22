@@ -985,7 +985,7 @@ onMounted(() => {
             </tr>
             <tr>
               <td><strong>🏃 Entrenamientos y Actividades GPS</strong></td>
-              <td>Integrado en la última versión v3.0.3.</td>
+              <td>Integrado en la última versión oficial v3.0.6 (v3.0.5 + mejoras de canal avanzado #143).</td>
               <td><span class="diff-tag same">100% Sincronizado</span> Mantiene el planificador de entrenamientos semanales, intervalos y carga TLB en la web.</td>
             </tr>
           </tbody>
@@ -1249,7 +1249,7 @@ if (fs.existsSync(dateTimeTsPath)) {
 }
 
 // 8. Corregir formato de fecha en HeartRateDetail.vue (Frecuencia cardíaca máxima diaria)
-const hrDetailPath = 'src/views/HeartRateDetail.vue';
+const hrDetailPath = fs.existsSync('src/views/HeartRateDetail.vue') ? 'src/views/HeartRateDetail.vue' : 'src/views/details/HeartRateDetail.vue';
 if (fs.existsSync(hrDetailPath)) {
   let hrCode = fs.readFileSync(hrDetailPath, 'utf8');
 
@@ -1284,7 +1284,7 @@ if (fs.existsSync(hrDetailPath)) {
 }
 
 // 9. Corregir formato de fecha en TrainingStatus.vue (Umbral de lactato y equilibrio de carga)
-const trainingStatusPath = 'src/views/TrainingStatus.vue';
+const trainingStatusPath = fs.existsSync('src/views/TrainingStatus.vue') ? 'src/views/TrainingStatus.vue' : 'src/views/training/TrainingStatus.vue';
 if (fs.existsSync(trainingStatusPath)) {
   let tsCode = fs.readFileSync(trainingStatusPath, 'utf8');
 
@@ -1345,7 +1345,7 @@ if (fs.existsSync(appI18nPath)) {
 }
 
 // 11. Agregar Entrenamientos y Planificador en la barra de navegación de AppShell.vue
-const appShellPath = 'src/AppShell.vue';
+const appShellPath = fs.existsSync('src/AppShell.vue') ? 'src/AppShell.vue' : 'src/components/AppShell.vue';
 if (fs.existsSync(appShellPath)) {
   let shellCode = fs.readFileSync(appShellPath, 'utf8');
   shellCode = shellCode.replace(
