@@ -725,36 +725,94 @@ async def handle_bridge_command(command: str, request: Request):
         start_str = start_date.strftime("%Y-%m-%d")
         end_str = end_date.strftime("%Y-%m-%d")
         
-        METRIC_UNITS = {
-            "steps": "步",
-            "distance": "米",
-            "active_calories": "千卡",
-            "active_minutes": "分钟",
-            "resting_hr": "bpm",
-            "sleep_score": "score",
-            "readiness": "score",
-            "physical_readiness": "score",
-            "mental_readiness": "score",
-            "hybrid_charge": "score",
-            "bio_charge": "score",
-            "stress": "score",
-            "training_load": "load",
-            "vo2max": "ml/kg/min",
-            "weight": "kg",
-            "bmi": "kg/m2",
-            "body_fat_rate": "%",
-            "hrv": "ms",
-            "hrv_rmssd": "ms",
-            "spo2": "%",
-            "pai_daily": "pai",
-            "pai_total": "pai"
+        METRIC_SPEC = {
+            "blood_pressure_systolic": ("metric_samples", "mmHg"),
+            "blood_pressure_diastolic": ("metric_samples", "mmHg"),
+            "blood_pressure_pulse": ("metric_samples", "bpm"),
+            "sleep_score": ("sleep_sessions", "score"),
+            "readiness": ("daily_metrics", "score"),
+            "physical_readiness": ("daily_metrics", "score"),
+            "mental_readiness": ("daily_metrics", "score"),
+            "hybrid_charge": ("daily_metrics", "score"),
+            "physical_charge": ("daily_metrics", "score"),
+            "mental_charge": ("daily_metrics", "score"),
+            "stress": ("daily_metrics", "score"),
+            "respiratory_rate": ("daily_metrics", "次/分"),
+            "resting_hr": ("daily_metrics", "bpm"),
+            "steps": ("daily_metrics", "步"),
+            "distance": ("daily_metrics", "米"),
+            "active_calories": ("daily_metrics", "千卡"),
+            "active_minutes": ("daily_metrics", "分钟"),
+            "spo2": ("metric_samples", "%"),
+            "spo2_odi": ("daily_metrics", "events/h"),
+            "spo2_night_score": ("daily_metrics", "score"),
+            "spo2_measured_minutes": ("daily_metrics", "分钟"),
+            "training_load": ("workouts", "load"),
+            "vo2max": ("workouts", "ml/kg/min"),
+            "lactate_threshold_hr": ("daily_metrics", "bpm"),
+            "lactate_threshold_pace": ("daily_metrics", "秒/公里"),
+            "pai_daily": ("daily_metrics", "pai"),
+            "pai_low_zone": ("daily_metrics", "pai"),
+            "pai_medium_zone": ("daily_metrics", "pai"),
+            "pai_high_zone": ("daily_metrics", "pai"),
+            "pai_total": ("daily_metrics", "pai"),
+            "pai_low_zone_minutes": ("daily_metrics", "分钟"),
+            "pai_medium_zone_minutes": ("daily_metrics", "分钟"),
+            "pai_high_zone_minutes": ("daily_metrics", "分钟"),
+            "sleep_hrv": ("daily_metrics", "ms"),
+            "sleep_rhr": ("daily_metrics", "bpm"),
+            "hrv_baseline": ("daily_metrics", "ms"),
+            "rhr_baseline": ("daily_metrics", "bpm"),
+            "ahi_baseline": ("daily_metrics", "events/h"),
+            "step_goal": ("daily_metrics", "步"),
+            "calorie_goal": ("daily_metrics", "千卡"),
+            "active_minutes_goal": ("daily_metrics", "分钟"),
+            "hrv": ("metric_samples", "ms"),
+            "hrv_rmssd": ("metric_samples", "ms"),
+            "weight": ("metric_samples", "kg"),
+            "bmi": ("metric_samples", "kg/m2"),
+            "height": ("metric_samples", "cm"),
+            "body_fat_rate": ("metric_samples", "%"),
+            "body_water_rate": ("metric_samples", "%"),
+            "muscle_mass": ("metric_samples", "kg"),
+            "bone_mass": ("metric_samples", "kg"),
+            "protein_rate": ("metric_samples", "%"),
+            "visceral_fat": ("metric_samples", "grade"),
+            "bmr": ("metric_samples", "kcal/day"),
+            "body_balance_score": ("metric_samples", "score"),
+            "intake_calories": ("daily_metrics", "kcal"),
+            "intake_protein_g": ("daily_metrics", "g"),
+            "intake_fat_g": ("daily_metrics", "g"),
+            "intake_carbs_g": ("daily_metrics", "g"),
+        }
+
+        METRIC_ALIASES = {
+            "body_fat_rate": ("body_fat_rate", "fatRate", "bodyFatRate", "fat_rate", "bodyFat"),
+            "muscle_mass": ("muscle_mass", "muscleMass", "muscle"),
+            "visceral_fat": ("visceral_fat", "visceralFat", "visceralFatGrade", "viscera"),
+            "body_water_rate": ("body_water_rate", "bodyWaterRate", "waterRate", "moisture"),
+            "bone_mass": ("bone_mass", "boneMass", "bone"),
+            "bmr": ("bmr", "basalMetabolism", "metabolism"),
+            "weight": ("weight", "body_weight"),
+            "bmi": ("bmi",),
+            "height": ("height",),
+            "hrv": ("hrv", "hrv_sdnn"),
+            "hrv_rmssd": ("hrv_rmssd",),
+            "spo2": ("spo2", "blood_oxygen", "oxygen"),
+            "blood_pressure_systolic": ("blood_pressure_systolic", "systolic"),
+            "blood_pressure_diastolic": ("blood_pressure_diastolic", "diastolic"),
+            "blood_pressure_pulse": ("blood_pressure_pulse", "bp_pulse"),
         }
         
         series = []
         for m in metrics:
-            unit = METRIC_UNITS.get(m, "")
+            spec = METRIC_SPEC.get(m, ("daily_metrics", ""))
+            preferred_source = spec[0]
+            unit = spec[1]
             points = []
-            source = "daily_metrics"
+            source = preferred_source
+            aliases = METRIC_ALIASES.get(m, (m,))
+            in_clause = ",".join("?" for _ in aliases)
             
             if m == "sleep_score":
                 source = "sleep_sessions"
@@ -773,17 +831,35 @@ async def handle_bridge_command(command: str, request: Request):
                             "max": None,
                             "samples": None
                         })
-            else:
-                rows = query_all(
-                    "SELECT date as dt, "
-                    "COALESCE(MAX(CASE WHEN source_scope = 'user_fused' THEN value END), MAX(value)) as val "
-                    "FROM daily_metrics WHERE metric = ? AND date BETWEEN ? AND ? "
-                    "GROUP BY date ORDER BY date ASC",
-                    (m, start_str, end_str)
+            elif preferred_source == "metric_samples":
+                s_rows = query_all(
+                    f"SELECT substr(timestamp, 1, 10) as dt, AVG(value) as val, MIN(value) as min_val, MAX(value) as max_val, COUNT(*) as cnt "
+                    f"FROM metric_samples WHERE metric IN ({in_clause}) AND substr(timestamp, 1, 10) BETWEEN ? AND ? "
+                    f"GROUP BY dt ORDER BY dt ASC",
+                    list(aliases) + [start_str, end_str]
                 )
-                if rows:
-                    source = "daily_metrics"
-                    for r in rows:
+                if s_rows:
+                    source = "metric_samples"
+                    for r in s_rows:
+                        cnt = r.get("cnt") or 0
+                        val = r.get("val")
+                        if val is not None:
+                            points.append({
+                                "date": r["dt"],
+                                "value": round(float(val), 1),
+                                "min": round(float(r["min_val"]), 1) if cnt > 1 and r.get("min_val") is not None else None,
+                                "max": round(float(r["max_val"]), 1) if cnt > 1 and r.get("max_val") is not None else None,
+                                "samples": cnt if cnt > 1 else None
+                            })
+                if not points:
+                    d_rows = query_all(
+                        f"SELECT date as dt, "
+                        f"COALESCE(MAX(CASE WHEN source_scope = 'user_fused' THEN value END), MAX(value)) as val "
+                        f"FROM daily_metrics WHERE metric IN ({in_clause}) AND date BETWEEN ? AND ? "
+                        f"GROUP BY date ORDER BY date ASC",
+                        list(aliases) + [start_str, end_str]
+                    )
+                    for r in d_rows:
                         if r.get("val") is not None:
                             points.append({
                                 "date": r["dt"],
@@ -792,23 +868,65 @@ async def handle_bridge_command(command: str, request: Request):
                                 "max": None,
                                 "samples": None
                             })
-                else:
+                    if points:
+                        source = "daily_metrics"
+            else:
+                rows = query_all(
+                    f"SELECT date as dt, "
+                    f"COALESCE(MAX(CASE WHEN source_scope = 'user_fused' THEN value END), MAX(value)) as val "
+                    f"FROM daily_metrics WHERE metric IN ({in_clause}) AND date BETWEEN ? AND ? "
+                    f"GROUP BY date ORDER BY date ASC",
+                    list(aliases) + [start_str, end_str]
+                )
+                for r in rows:
+                    if r.get("val") is not None:
+                        points.append({
+                            "date": r["dt"],
+                            "value": round(float(r["val"]), 1),
+                            "min": None,
+                            "max": None,
+                            "samples": None
+                        })
+                if points and m in ("stress", "respiratory_rate"):
+                    min_dict = {
+                        r["dt"]: float(r["val"]) for r in query_all(
+                            "SELECT date as dt, MAX(value) as val FROM daily_metrics WHERE metric = ? AND date BETWEEN ? AND ? GROUP BY date",
+                            (f"{m}_min", start_str, end_str)
+                        ) if r.get("val") is not None
+                    }
+                    max_dict = {
+                        r["dt"]: float(r["val"]) for r in query_all(
+                            "SELECT date as dt, MAX(value) as val FROM daily_metrics WHERE metric = ? AND date BETWEEN ? AND ? GROUP BY date",
+                            (f"{m}_max", start_str, end_str)
+                        ) if r.get("val") is not None
+                    }
+                    for pt in points:
+                        d = pt["date"]
+                        if d in min_dict:
+                            pt["min"] = round(min_dict[d], 1)
+                        if d in max_dict:
+                            pt["max"] = round(max_dict[d], 1)
+
+                if not points:
                     s_rows = query_all(
-                        "SELECT substr(timestamp, 1, 10) as dt, AVG(value) as val, MIN(value) as min_val, MAX(value) as max_val, COUNT(*) as cnt "
-                        "FROM metric_samples WHERE metric = ? AND substr(timestamp, 1, 10) BETWEEN ? AND ? "
-                        "GROUP BY dt ORDER BY dt ASC",
-                        (m, start_str, end_str)
+                        f"SELECT substr(timestamp, 1, 10) as dt, AVG(value) as val, MIN(value) as min_val, MAX(value) as max_val, COUNT(*) as cnt "
+                        f"FROM metric_samples WHERE metric IN ({in_clause}) AND substr(timestamp, 1, 10) BETWEEN ? AND ? "
+                        f"GROUP BY dt ORDER BY dt ASC",
+                        list(aliases) + [start_str, end_str]
                     )
                     if s_rows:
                         source = "metric_samples"
                         for r in s_rows:
-                            points.append({
-                                "date": r["dt"],
-                                "value": round(float(r["val"]), 1),
-                                "min": round(float(r["min_val"]), 1) if r.get("min_val") is not None else None,
-                                "max": round(float(r["max_val"]), 1) if r.get("max_val") is not None else None,
-                                "samples": r.get("cnt")
-                            })
+                            cnt = r.get("cnt") or 0
+                            val = r.get("val")
+                            if val is not None:
+                                points.append({
+                                    "date": r["dt"],
+                                    "value": round(float(val), 1),
+                                    "min": round(float(r["min_val"]), 1) if cnt > 1 and r.get("min_val") is not None else None,
+                                    "max": round(float(r["max_val"]), 1) if cnt > 1 and r.get("max_val") is not None else None,
+                                    "samples": cnt if cnt > 1 else None
+                                })
 
                 if m == "training_load" and not points:
                     w_rows = query_all(
@@ -867,30 +985,65 @@ async def handle_bridge_command(command: str, request: Request):
 
     elif command == "get_metric_baselines":
         metrics = body.get("metrics", [])
-        return [{"metric": m, "baseline": None, "samples": 0} for m in metrics]
+        end_date = datetime.now().date()
+        start_date = end_date - timedelta(days=27)
+        start_str = start_date.strftime("%Y-%m-%d")
+        end_str = end_date.strftime("%Y-%m-%d")
+        baselines = []
+        for m in metrics:
+            r = query_one(
+                "SELECT AVG(value) as avg_val, COUNT(*) as cnt FROM daily_metrics "
+                "WHERE metric = ? AND date BETWEEN ? AND ?",
+                (m, start_str, end_str)
+            )
+            if not r or not r.get("cnt"):
+                r = query_one(
+                    "SELECT AVG(value) as avg_val, COUNT(DISTINCT substr(timestamp, 1, 10)) as cnt FROM metric_samples "
+                    "WHERE metric = ? AND substr(timestamp, 1, 10) BETWEEN ? AND ?",
+                    (m, start_str, end_str)
+                )
+            cnt = r.get("cnt") or 0 if r else 0
+            avg_val = round(float(r["avg_val"]), 1) if r and r.get("avg_val") is not None else None
+            baselines.append({
+                "metric": m,
+                "baseline": avg_val if cnt >= 5 else None,
+                "samples": cnt
+            })
+        return baselines
 
     elif command == "get_heart_rate_series":
         hours = int(body.get("hours", 24))
         hours = max(1, min(hours, 24 * 14))
-        cutoff = (datetime.utcnow() - timedelta(hours=hours)).isoformat() + "Z"
+        cutoff_dt = datetime.utcnow() - timedelta(hours=hours)
+        cutoff_str = cutoff_dt.strftime("%Y-%m-%dT%H:%M:%S")
         rows = query_all(
             "SELECT timestamp, value FROM metric_samples "
-            "WHERE metric = 'heart_rate' AND timestamp >= ? "
+            "WHERE metric = 'heart_rate' AND REPLACE(substr(timestamp, 1, 19), ' ', 'T') >= ? "
             "ORDER BY timestamp ASC",
-            (cutoff,)
+            (cutoff_str,)
         )
         return [{"timestamp": r["timestamp"], "value": int(round(r["value"]))} for r in rows if r.get("value") is not None]
 
     elif command == "get_stress_series":
         hours = int(body.get("hours", 24))
         hours = max(1, min(hours, 24 * 14))
-        cutoff = (datetime.utcnow() - timedelta(hours=hours)).isoformat() + "Z"
+        cutoff_dt = datetime.utcnow() - timedelta(hours=hours)
+        cutoff_str = cutoff_dt.strftime("%Y-%m-%dT%H:%M:%S")
         rows = query_all(
             "SELECT timestamp, value FROM metric_samples "
-            "WHERE metric = 'stress' AND timestamp >= ? "
+            "WHERE metric = 'stress' AND REPLACE(substr(timestamp, 1, 19), ' ', 'T') >= ? "
             "ORDER BY timestamp ASC",
-            (cutoff,)
+            (cutoff_str,)
         )
+        # Respaldo: si en 24h no hay muestras, buscar en las últimas 48h para mostrar la curva más reciente si el último sync fue ayer
+        if not rows and hours == 24:
+            fallback_cutoff = (datetime.utcnow() - timedelta(hours=48)).strftime("%Y-%m-%dT%H:%M:%S")
+            rows = query_all(
+                "SELECT timestamp, value FROM metric_samples "
+                "WHERE metric = 'stress' AND REPLACE(substr(timestamp, 1, 19), ' ', 'T') >= ? "
+                "ORDER BY timestamp ASC",
+                (fallback_cutoff,)
+            )
         return [{"timestamp": r["timestamp"], "value": int(round(r["value"]))} for r in rows if r.get("value") is not None]
 
     elif command == "get_daily_heart_rate_extremes":
@@ -1630,6 +1783,34 @@ async def handle_bridge_command(command: str, request: Request):
                 "recordsUnitCode": "records",
                 "windowDays": 180,
                 "latestDate": stress_cnt.get("m"),
+                "source": "derived",
+                "ingested": True
+            })
+
+        wt_cnt = query_one("SELECT COUNT(*) as c, MAX(substr(timestamp, 1, 10)) as m FROM metric_samples WHERE metric = 'weight'")
+        if wt_cnt and wt_cnt["c"] > 0:
+            items.append({
+                "stream": "weight",
+                "status": "available",
+                "records": wt_cnt["c"],
+                "recordsUnit": "records",
+                "recordsUnitCode": "records",
+                "windowDays": 180,
+                "latestDate": wt_cnt.get("m"),
+                "source": "derived",
+                "ingested": True
+            })
+
+        hrv_cnt = query_one("SELECT COUNT(*) as c, MAX(substr(timestamp, 1, 10)) as m FROM metric_samples WHERE metric IN ('hrv', 'hrv_rmssd')")
+        if hrv_cnt and hrv_cnt["c"] > 0:
+            items.append({
+                "stream": "hrv",
+                "status": "available",
+                "records": hrv_cnt["c"],
+                "recordsUnit": "records",
+                "recordsUnitCode": "records",
+                "windowDays": 180,
+                "latestDate": hrv_cnt.get("m"),
                 "source": "derived",
                 "ingested": True
             })
