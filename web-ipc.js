@@ -18,6 +18,100 @@
     }
   } catch (e) {}
 
+  // --------------------------------------------------------------------------
+  // Polyfill universal de Portapapeles (navigator.clipboard) para HTTP / Red Local
+  // En conexiones HTTP (como http://192.168.x.x:27480), los navegadores desactivan
+  // navigator.clipboard por no ser un contexto seguro (HTTPS/localhost).
+  // Este polyfill provee un fallback con document.execCommand para que funciones
+  // como "Copiar JSON", "Copiar Token" o "Copiar Prompt" funcionen sin error.
+  // --------------------------------------------------------------------------
+  function copyTextFallback(text) {
+    try {
+      const el = document.createElement('textarea');
+      el.value = String(text ?? '');
+      el.setAttribute('readonly', '');
+      el.style.contain = 'strict';
+      el.style.position = 'fixed';
+      el.style.top = '-9999px';
+      el.style.left = '-9999px';
+      el.style.opacity = '0';
+      const sel = document.getSelection();
+      const origRange = sel && sel.rangeCount > 0 ? sel.getRangeAt(0) : null;
+      document.body.appendChild(el);
+      el.select();
+      el.setSelectionRange(0, el.value.length);
+      const success = document.execCommand('copy');
+      document.body.removeChild(el);
+      if (origRange && sel) {
+        sel.removeAllRanges();
+        sel.addRange(origRange);
+      }
+      return success;
+    } catch (e) {
+      console.warn('[Web IPC] Error en copyTextFallback:', e);
+      return false;
+    }
+  }
+
+  let memoryClipboard = '';
+
+  const safeClipboard = {
+    async writeText(text) {
+      const str = String(text ?? '');
+      memoryClipboard = str;
+      if (window.isSecureContext && originalClipboard && typeof originalClipboard.writeText === 'function') {
+        try {
+          await originalClipboard.writeText(str);
+          return;
+        } catch (err) {}
+      }
+      copyTextFallback(str);
+    },
+    async readText() {
+      if (window.isSecureContext && originalClipboard && typeof originalClipboard.readText === 'function') {
+        try {
+          return await originalClipboard.readText();
+        } catch (err) {}
+      }
+      return memoryClipboard;
+    }
+  };
+
+  const originalClipboard = (typeof navigator !== 'undefined') ? navigator.clipboard : undefined;
+  if (typeof navigator !== 'undefined') {
+    if (!navigator.clipboard || typeof navigator.clipboard.writeText !== 'function') {
+      try {
+        Object.defineProperty(navigator, 'clipboard', {
+          value: safeClipboard,
+          writable: true,
+          configurable: true,
+          enumerable: true
+        });
+      } catch (e1) {
+        try {
+          Object.defineProperty(Object.getPrototypeOf(navigator), 'clipboard', {
+            value: safeClipboard,
+            writable: true,
+            configurable: true,
+            enumerable: true
+          });
+        } catch (e2) {
+          try { navigator.clipboard = safeClipboard; } catch (e3) {}
+        }
+      }
+    } else {
+      const nativeWrite = navigator.clipboard.writeText.bind(navigator.clipboard);
+      navigator.clipboard.writeText = async function(text) {
+        memoryClipboard = String(text ?? '');
+        try {
+          await nativeWrite(memoryClipboard);
+        } catch (e) {
+          copyTextFallback(memoryClipboard);
+        }
+      };
+    }
+  }
+
   const eventListeners = new Map();
   const callbackRegistry = new Map();
   let nextCallbackId = 1;
@@ -87,16 +181,25 @@
       // 2. Manejo de Clipboard nativo del navegador
       if (command === 'plugin:clipboard-manager|read_text') {
         try {
-          return (await navigator.clipboard.readText()) || '';
+          if (navigator.clipboard && navigator.clipboard.readText) {
+            return (await navigator.clipboard.readText()) || memoryClipboard || '';
+          }
+          return memoryClipboard || '';
         } catch (e) {
-          return '';
+          return memoryClipboard || '';
         }
       }
       if (command === 'plugin:clipboard-manager|write_text') {
         try {
-          await navigator.clipboard.writeText(String(args.text || ''));
+          const text = String(args.text || '');
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(text);
+          } else {
+            copyTextFallback(text);
+          }
           return true;
         } catch (e) {
+          copyTextFallback(String(args.text || ''));
           return true;
         }
       }

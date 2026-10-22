@@ -1402,4 +1402,38 @@ if (fs.existsSync(workoutCodesPath)) {
   console.log('[Patch] Sección de Códigos de Deporte mejorada en WorkoutCodesSection.vue');
 }
 
+// 14. Proteger copiado al portapapeles en useWorkoutDetail.ts (Exportar JSON / CSV / GPX en HTTP no seguro)
+const workoutDetailComposablePath = 'src/composables/useWorkoutDetail.ts';
+if (fs.existsSync(workoutDetailComposablePath)) {
+  let wdCode = fs.readFileSync(workoutDetailComposablePath, 'utf8');
+  wdCode = wdCode.replace(
+    "await navigator.clipboard.writeText(payload);",
+    `if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+        try {
+          await navigator.clipboard.writeText(payload);
+        } catch (e) {
+          const ta = document.createElement('textarea');
+          ta.value = payload;
+          ta.style.position = 'fixed';
+          ta.style.opacity = '0';
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand('copy');
+          document.body.removeChild(ta);
+        }
+      } else {
+        const ta = document.createElement('textarea');
+        ta.value = payload;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      }`
+  );
+  fs.writeFileSync(workoutDetailComposablePath, wdCode, 'utf8');
+  console.log('[Patch] Copiado seguro al portapapeles configurado en useWorkoutDetail.ts');
+}
+
 console.log('[Patch] Proceso de parcheo finalizado con éxito.');
