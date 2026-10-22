@@ -810,6 +810,46 @@ async def handle_bridge_command(command: str, request: Request):
                                 "samples": r.get("cnt")
                             })
 
+                if m == "training_load" and not points:
+                    w_rows = query_all(
+                        "SELECT substr(start_time, 1, 10) as dt, "
+                        "SUM(COALESCE(CASE WHEN training_load IS NOT NULL AND training_load > 0 THEN training_load ELSE NULL END, "
+                        "             CASE WHEN calories IS NOT NULL AND calories > 0 THEN calories / 10.0 ELSE NULL END, "
+                        "             (duration_seconds / 60.0) * (COALESCE(avg_hr, 120) / 120.0))) as val "
+                        "FROM workouts WHERE substr(start_time, 1, 10) BETWEEN ? AND ? "
+                        "GROUP BY dt HAVING val > 0 ORDER BY dt ASC",
+                        (start_str, end_str)
+                    )
+                    if w_rows:
+                        source = "workouts"
+                        for r in w_rows:
+                            if r.get("val") is not None:
+                                points.append({
+                                    "date": r["dt"],
+                                    "value": round(float(r["val"]), 1),
+                                    "min": None,
+                                    "max": None,
+                                    "samples": None
+                                })
+                elif m == "vo2max" and not points:
+                    v_rows = query_all(
+                        "SELECT substr(start_time, 1, 10) as dt, MAX(vo2max) as val "
+                        "FROM workouts WHERE vo2max IS NOT NULL AND vo2max > 0 AND substr(start_time, 1, 10) BETWEEN ? AND ? "
+                        "GROUP BY dt ORDER BY dt ASC",
+                        (start_str, end_str)
+                    )
+                    if v_rows:
+                        source = "workouts"
+                        for r in v_rows:
+                            if r.get("val") is not None:
+                                points.append({
+                                    "date": r["dt"],
+                                    "value": round(float(r["val"]), 1),
+                                    "min": None,
+                                    "max": None,
+                                    "samples": None
+                                })
+
             vals = [p["value"] for p in points]
             series.append({
                 "metric": m,
@@ -878,22 +918,46 @@ async def handle_bridge_command(command: str, request: Request):
 
     elif command == "get_training_balance":
         days = int(body.get("days", 30))
-        start_str = (datetime.now().date() - timedelta(days=days - 1)).strftime("%Y-%m-%d")
-        rows = query_all(
-            "SELECT date, value FROM daily_metrics WHERE metric = 'training_load' AND date >= ? ORDER BY date ASC",
-            (start_str,)
+        end_date = datetime.now().date()
+        start_date = end_date - timedelta(days=days - 1)
+        history_start = start_date - timedelta(days=27)
+
+        w_rows = query_all(
+            "SELECT substr(start_time, 1, 10) as dt, "
+            "SUM(COALESCE(CASE WHEN training_load IS NOT NULL AND training_load > 0 THEN training_load ELSE NULL END, "
+            "             CASE WHEN calories IS NOT NULL AND calories > 0 THEN calories / 10.0 ELSE NULL END, "
+            "             (duration_seconds / 60.0) * (COALESCE(avg_hr, 120) / 120.0))) as load "
+            "FROM workouts WHERE substr(start_time, 1, 10) BETWEEN ? AND ? "
+            "GROUP BY dt",
+            (history_start.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"))
         )
+        daily_loads = {r["dt"]: float(r["load"]) for r in w_rows if r.get("dt") and r.get("load") is not None}
+
+        dm_rows = query_all(
+            "SELECT date, value FROM daily_metrics WHERE metric = 'training_load' AND date BETWEEN ? AND ?",
+            (history_start.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"))
+        )
+        for r in dm_rows:
+            if r.get("date") and r.get("value") is not None:
+                daily_loads[r["date"]] = max(daily_loads.get(r["date"], 0.0), float(r["value"]))
+
         pts = []
-        for r in rows:
-            val = float(r["value"])
+        curr = start_date
+        while curr <= end_date:
+            curr_str = curr.strftime("%Y-%m-%d")
+            acute_sum = sum(daily_loads.get((curr - timedelta(days=i)).strftime("%Y-%m-%d"), 0.0) for i in range(7))
+            chronic_sum = sum(daily_loads.get((curr - timedelta(days=i)).strftime("%Y-%m-%d"), 0.0) for i in range(28))
+            chronic_weekly = chronic_sum / 4.0
+            ratio = round(acute_sum / chronic_weekly, 2) if chronic_weekly > 0 else 1.0
             pts.append({
-                "date": r["date"],
-                "acute_7d": val,
+                "date": curr_str,
+                "acute_7d": round(acute_sum, 1) if acute_sum > 0 else 0.0,
                 "acute_days_with_data": 7,
-                "chronic_28d": val,
+                "chronic_28d": round(chronic_sum, 1) if chronic_sum > 0 else 0.0,
                 "chronic_days_with_data": 28,
-                "acute_chronic_ratio": 1.0
+                "acute_chronic_ratio": ratio if (acute_sum > 0 or chronic_sum > 0) else 1.0
             })
+            curr += timedelta(days=1)
         return pts
 
     elif command == "get_health_overview":
@@ -1369,6 +1433,24 @@ async def handle_bridge_command(command: str, request: Request):
                     (metric, baseline_start.strftime("%Y-%m-%d"), baseline_end.strftime("%Y-%m-%d"))
                 )
 
+            if metric == "training_load" and (not rec_row or rec_row.get("val") is None):
+                rec_row = query_one(
+                    "SELECT AVG(COALESCE(CASE WHEN training_load IS NOT NULL AND training_load > 0 THEN training_load ELSE NULL END, "
+                    "                    CASE WHEN calories IS NOT NULL AND calories > 0 THEN calories / 10.0 ELSE NULL END, "
+                    "                    (duration_seconds / 60.0) * (COALESCE(avg_hr, 120) / 120.0))) as val, COUNT(*) as cnt "
+                    "FROM workouts WHERE substr(start_time, 1, 10) >= ?",
+                    (recent_start.strftime("%Y-%m-%d"),)
+                )
+                base_row = query_one(
+                    "SELECT AVG(COALESCE(CASE WHEN training_load IS NOT NULL AND training_load > 0 THEN training_load ELSE NULL END, "
+                    "                    CASE WHEN calories IS NOT NULL AND calories > 0 THEN calories / 10.0 ELSE NULL END, "
+                    "                    (duration_seconds / 60.0) * (COALESCE(avg_hr, 120) / 120.0))) as val, COUNT(*) as cnt "
+                    "FROM workouts WHERE substr(start_time, 1, 10) BETWEEN ? AND ?",
+                    (baseline_start.strftime("%Y-%m-%d"), baseline_end.strftime("%Y-%m-%d"))
+                )
+                if rec_row and rec_row.get("val") is not None:
+                    table = "workouts"
+
             if rec_row and rec_row.get("val") is not None:
                 val = round(float(rec_row["val"]), 1)
                 base_val = round(float(base_row["val"]), 1) if base_row and base_row.get("val") is not None else val
@@ -1757,12 +1839,129 @@ async def handle_bridge_command(command: str, request: Request):
     # --------------------------------------------------------------------------
     elif command == "get_heart_rate_zones":
         days = body.get("days", 30)
+        try:
+            days = int(days)
+        except Exception:
+            days = 30
+
         rhr_row = query_one("SELECT value FROM daily_metrics WHERE metric = 'resting_hr' ORDER BY date DESC LIMIT 1")
         resting_val = int(round(rhr_row["value"])) if rhr_row and rhr_row.get("value") is not None else 60
         max_row = query_one("SELECT MAX(value) as max_val FROM metric_samples WHERE metric = 'heart_rate'")
         max_val = int(round(max_row["max_val"])) if max_row and max_row.get("max_val") is not None else 190
+        w_max_row = query_one("SELECT MAX(max_hr) as max_val FROM workouts")
+        if w_max_row and w_max_row.get("max_val"):
+            max_val = max(max_val, int(round(w_max_row["max_val"])))
         if max_val < 140:
             max_val = 190
+
+        start_date_str = (datetime.now().date() - timedelta(days=days - 1)).strftime("%Y-%m-%d")
+
+        z1_min = int(round(max_val * 0.50))
+        z1_max = int(round(max_val * 0.60))
+        z2_min = z1_max
+        z2_max = int(round(max_val * 0.70))
+        z3_min = z2_max
+        z3_max = int(round(max_val * 0.80))
+        z4_min = z3_max
+        z4_max = int(round(max_val * 0.90))
+        z5_min = z4_max
+        z5_max = max_val
+
+        z1_sec = 0
+        z2_sec = 0
+        z3_sec = 0
+        z4_sec = 0
+        z5_sec = 0
+        below_sec = 0
+        above_sec = 0
+        source = "workouts"
+
+        # 1. Intentar con workout_samples (frecuencia segundo a segundo en entrenamientos)
+        ws_row = query_one(
+            "SELECT "
+            "COUNT(CASE WHEN heart_rate < ? THEN 1 END) as below_z1, "
+            "COUNT(CASE WHEN heart_rate >= ? AND heart_rate < ? THEN 1 END) as z1, "
+            "COUNT(CASE WHEN heart_rate >= ? AND heart_rate < ? THEN 1 END) as z2, "
+            "COUNT(CASE WHEN heart_rate >= ? AND heart_rate < ? THEN 1 END) as z3, "
+            "COUNT(CASE WHEN heart_rate >= ? AND heart_rate < ? THEN 1 END) as z4, "
+            "COUNT(CASE WHEN heart_rate >= ? AND heart_rate <= ? THEN 1 END) as z5, "
+            "COUNT(CASE WHEN heart_rate > ? THEN 1 END) as above_z5 "
+            "FROM workout_samples WHERE substr(timestamp, 1, 10) >= ? AND heart_rate > 0",
+            (z1_min, z1_min, z2_min, z2_min, z3_min, z3_min, z4_min, z4_min, z5_min, z5_min, z5_max, z5_max, start_date_str)
+        )
+        if ws_row and any(ws_row.get(k) for k in ("z1", "z2", "z3", "z4", "z5")):
+            below_sec = int(ws_row.get("below_z1") or 0)
+            z1_sec = int(ws_row.get("z1") or 0)
+            z2_sec = int(ws_row.get("z2") or 0)
+            z3_sec = int(ws_row.get("z3") or 0)
+            z4_sec = int(ws_row.get("z4") or 0)
+            z5_sec = int(ws_row.get("z5") or 0)
+            above_sec = int(ws_row.get("above_z5") or 0)
+            source = "workout_samples"
+        else:
+            # 2. Respaldo: distribución desde resumen de workouts por duración y FC media
+            w_rows = query_all(
+                "SELECT duration_seconds, avg_hr, max_hr FROM workouts "
+                "WHERE substr(start_time, 1, 10) >= ? AND duration_seconds > 0",
+                (start_date_str,)
+            )
+            has_w = False
+            if w_rows:
+                for w in w_rows:
+                    dur = int(w.get("duration_seconds") or 0)
+                    avg = w.get("avg_hr")
+                    if not avg or avg <= 0:
+                        continue
+                    has_w = True
+                    if avg < z1_min:
+                        below_sec += dur
+                    elif avg < z2_min:
+                        z1_sec += dur
+                    elif avg < z3_min:
+                        z2_sec += dur
+                    elif avg < z4_min:
+                        z3_sec += dur
+                    elif avg < z5_min:
+                        z4_sec += dur
+                    elif avg <= z5_max:
+                        z5_sec += dur
+                    else:
+                        above_sec += dur
+            if has_w:
+                source = "workouts"
+            else:
+                # 3. Respaldo: metric_samples (FC continua en reposo/diaria)
+                ms_row = query_one(
+                    "SELECT "
+                    "COUNT(CASE WHEN value < ? THEN 1 END) as below_z1, "
+                    "COUNT(CASE WHEN value >= ? AND value < ? THEN 1 END) as z1, "
+                    "COUNT(CASE WHEN value >= ? AND value < ? THEN 1 END) as z2, "
+                    "COUNT(CASE WHEN value >= ? AND value < ? THEN 1 END) as z3, "
+                    "COUNT(CASE WHEN value >= ? AND value < ? THEN 1 END) as z4, "
+                    "COUNT(CASE WHEN value >= ? AND value <= ? THEN 1 END) as z5, "
+                    "COUNT(CASE WHEN value > ? THEN 1 END) as above_z5 "
+                    "FROM metric_samples WHERE metric = 'heart_rate' AND substr(timestamp, 1, 10) >= ? AND value > 0",
+                    (z1_min, z1_min, z2_min, z2_min, z3_min, z3_min, z4_min, z4_min, z5_min, z5_min, z5_max, z5_max, start_date_str)
+                )
+                if ms_row and any(ms_row.get(k) for k in ("z1", "z2", "z3", "z4", "z5")):
+                    factor = 60
+                    below_sec = int(ms_row.get("below_z1") or 0) * factor
+                    z1_sec = int(ms_row.get("z1") or 0) * factor
+                    z2_sec = int(ms_row.get("z2") or 0) * factor
+                    z3_sec = int(ms_row.get("z3") or 0) * factor
+                    z4_sec = int(ms_row.get("z4") or 0) * factor
+                    z5_sec = int(ms_row.get("z5") or 0) * factor
+                    above_sec = int(ms_row.get("above_z5") or 0) * factor
+                    source = "metric_samples"
+
+        total_sec = z1_sec + z2_sec + z3_sec + z4_sec + z5_sec + below_sec + above_sec
+        saved_pref = load_json_file("hr_zone_pref.json", {})
+        pref = saved_pref if saved_pref else {
+            "model": "max_hr",
+            "maxBasis": "max_hr_est",
+            "restingBasis": "resting_hr_est",
+            "thresholdBasis": None
+        }
 
         return {
             "bases": [
@@ -1805,29 +2004,24 @@ async def handle_bridge_command(command: str, request: Request):
                     "available": True
                 }
             ],
-            "preference": {
-                "model": "max_hr",
-                "maxBasis": "max_hr_est",
-                "restingBasis": "resting_hr_est",
-                "thresholdBasis": None
-            },
+            "preference": pref,
             "report": {
                 "model": "max_hr",
                 "modelLabel": "% FC Máxima",
                 "formula": "bpm / max_hr",
                 "bases": [],
                 "zones": [
-                    {"zone": 1, "label": "Zona 1", "minBpm": 95, "maxBpm": 114, "seconds": 0},
-                    {"zone": 2, "label": "Zona 2", "minBpm": 114, "maxBpm": 133, "seconds": 0},
-                    {"zone": 3, "label": "Zona 3", "minBpm": 133, "maxBpm": 152, "seconds": 0},
-                    {"zone": 4, "label": "Zona 4", "minBpm": 152, "maxBpm": 171, "seconds": 0},
-                    {"zone": 5, "label": "Zona 5", "minBpm": 171, "maxBpm": 190, "seconds": 0}
+                    {"zone": 1, "label": "Zona 1", "minBpm": z1_min, "maxBpm": z1_max, "seconds": z1_sec},
+                    {"zone": 2, "label": "Zona 2", "minBpm": z2_min, "maxBpm": z2_max, "seconds": z2_sec},
+                    {"zone": 3, "label": "Zona 3", "minBpm": z3_min, "maxBpm": z3_max, "seconds": z3_sec},
+                    {"zone": 4, "label": "Zona 4", "minBpm": z4_min, "maxBpm": z4_max, "seconds": z4_sec},
+                    {"zone": 5, "label": "Zona 5", "minBpm": z5_min, "maxBpm": z5_max, "seconds": z5_sec}
                 ],
-                "belowZone1Seconds": 0,
-                "aboveZone5Seconds": 0,
-                "totalSeconds": 0,
+                "belowZone1Seconds": below_sec,
+                "aboveZone5Seconds": above_sec,
+                "totalSeconds": total_sec,
                 "windowDays": days,
-                "source": "default"
+                "source": source
             },
             "windowDays": days
         }
