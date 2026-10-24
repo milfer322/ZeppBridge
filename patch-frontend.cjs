@@ -1436,4 +1436,28 @@ if (fs.existsSync(workoutDetailComposablePath)) {
   console.log('[Patch] Copiado seguro al portapapeles configurado en useWorkoutDetail.ts');
 }
 
+// 15. Traducir 'weekly.steps' y unidades en WeeklyReportCard.i18n.ts
+const weeklyReportI18nPath = 'src/components/WeeklyReportCard.i18n.ts';
+if (fs.existsSync(weeklyReportI18nPath)) {
+  let wrCode = fs.readFileSync(weeklyReportI18nPath, 'utf8');
+  wrCode = wrCode.replace(
+    "'weekly.training_load': '训练负荷',",
+    "'weekly.training_load': '训练负荷',\n      'weekly.steps': '步数',"
+  );
+  wrCode = wrCode.replace(
+    "'weekly.training_load': 'Training load',",
+    "'weekly.training_load': 'Training load',\n      'weekly.steps': 'Steps',"
+  );
+  wrCode = wrCode.replace(
+    "'weekly.training_load': 'Carga de entrenamiento',",
+    "'weekly.training_load': 'Carga de entrenamiento',\n      'weekly.steps': 'Pasos',"
+  );
+  wrCode = wrCode.replace(
+    "({ score: 'pts', load: '', bpm: 'lpm' }",
+    "({ score: 'pts', load: '', bpm: 'lpm', pasos: 'pasos', 步: 'pasos' }"
+  );
+  fs.writeFileSync(weeklyReportI18nPath, wrCode, 'utf8');
+  console.log('[Patch] Traducción de weekly.steps agregada en WeeklyReportCard.i18n.ts');
+}
+
 console.log('[Patch] Proceso de parcheo finalizado con éxito.');
