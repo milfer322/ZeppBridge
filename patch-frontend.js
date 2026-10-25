@@ -898,6 +898,8 @@ onMounted(() => {
             <Icon :name="restoreResult.ok ? 'circle-check' : 'warning'" :size="15" />
             <span>{{ restoreResult.message }}</span>
           </div>
+        </div>
+
         <div class="s-row">
           <div class="s-row-main">
             <span class="s-row-title">Historial Antiguo en la Nube</span>
