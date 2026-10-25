@@ -18,6 +18,7 @@ def init_db_pragmas():
         conn.execute("PRAGMA busy_timeout = 10000;")
         conn.close()
         print("[DB] Modo WAL y busy_timeout configurados con éxito en zepp.db")
+        ensure_tables()
     except Exception as e:
         print(f"[DB] Error al inicializar PRAGMAs en {DB_PATH}: {e}")
 
@@ -102,3 +103,35 @@ def get_existing_tables() -> List[str]:
         return [row[0] for row in cursor.fetchall()]
     finally:
         conn.close()
+
+def ensure_tables():
+    """Crea las tablas locales de correcciones y extensiones si no existen."""
+    conn = get_db_write_connection()
+    if conn:
+        try:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS workout_fit_overrides (
+                    workout_id TEXT PRIMARY KEY,
+                    file_name TEXT,
+                    sha256 TEXT NOT NULL,
+                    byte_len INTEGER NOT NULL,
+                    fit BLOB NOT NULL,
+                    imported_at TEXT NOT NULL,
+                    fit_start_time TEXT NOT NULL,
+                    fit_end_time TEXT NOT NULL,
+                    fit_distance_m REAL,
+                    fit_moving_seconds INTEGER,
+                    fit_avg_hr INTEGER,
+                    fit_max_hr INTEGER,
+                    original_end_time TEXT,
+                    original_distance_m REAL,
+                    original_moving_seconds INTEGER,
+                    original_avg_hr INTEGER,
+                    original_max_hr INTEGER
+                );
+            """)
+            conn.commit()
+        except Exception as e:
+            print(f"[DB] Error creando tablas en ensure_tables: {e}")
+        finally:
+            conn.close()

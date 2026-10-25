@@ -283,6 +283,25 @@
       if (command === 'plugin:app|tauri_version') {
         return '2.0.0';
       }
+      if (command === 'open_external_url') {
+        if (args && args.url) {
+          try { window.open(args.url, '_blank'); } catch (e) {}
+        }
+        return null;
+      }
+      if (command === 'plugin:drag|start_drag') {
+        return null;
+      }
+      if (command === 'check_official_login_now') {
+        return {
+          state: 'idle',
+          message: '',
+          page_url: '',
+          authorize_url: null,
+          account_id: null,
+          nickname: null
+        };
+      }
       if (command === 'start_history_backfill') {
         try {
           localStorage.setItem('zb.backfillOffer.dismissed.overview', '1');

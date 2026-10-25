@@ -526,6 +526,69 @@ async def handle_bridge_command(command: str, request: Request):
     # --------------------------------------------------------------------------
     if command == "app_is_ready":
         return True
+    elif command == "check_official_login_now":
+        return {
+            "state": "idle",
+            "message": "",
+            "page_url": "",
+            "authorize_url": None,
+            "account_id": None,
+            "nickname": None
+        }
+
+    elif command == "get_workout_fit_override":
+        wid = body.get("workoutId") or body.get("workout_id") or ""
+        r = query_one(
+            "SELECT workout_id, file_name, sha256, byte_len, imported_at, "
+            "fit_distance_m, fit_moving_seconds, original_distance_m, original_moving_seconds, "
+            "fit_start_time, fit_end_time, fit_avg_hr, fit_max_hr, "
+            "original_end_time, original_avg_hr, original_max_hr "
+            "FROM workout_fit_overrides WHERE workout_id = ?",
+            (wid,)
+        )
+        if r:
+            return {
+                "workoutId": r["workout_id"],
+                "fileName": r.get("file_name"),
+                "sha256": r.get("sha256"),
+                "byteLen": r.get("byte_len"),
+                "importedAt": r.get("imported_at"),
+                "distanceM": r.get("fit_distance_m"),
+                "movingSeconds": r.get("fit_moving_seconds"),
+                "originalDistanceM": r.get("original_distance_m"),
+                "originalMovingSeconds": r.get("original_moving_seconds"),
+                "fitStartTime": r.get("fit_start_time"),
+                "fitEndTime": r.get("fit_end_time"),
+                "fitAvgHr": r.get("fit_avg_hr"),
+                "fitMaxHr": r.get("fit_max_hr"),
+                "originalEndTime": r.get("original_end_time"),
+                "originalAvgHr": r.get("original_avg_hr"),
+                "originalMaxHr": r.get("original_max_hr"),
+            }
+        return None
+
+    elif command == "import_workout_fit":
+        wid = body.get("workoutId") or body.get("workout_id") or ""
+        return {
+            "workoutId": wid,
+            "fileName": None,
+            "sha256": "",
+            "byteLen": 0,
+            "importedAt": datetime.utcnow().isoformat() + "Z",
+            "distanceM": None,
+            "movingSeconds": None,
+            "originalDistanceM": None,
+            "originalMovingSeconds": None
+        }
+
+    elif command == "remove_workout_fit":
+        wid = body.get("workoutId") or body.get("workout_id") or ""
+        execute_write("DELETE FROM workout_fit_overrides WHERE workout_id = ?", (wid,))
+        return True
+
+    elif command == "open_external_url":
+        return True
+
 
     elif command in ("plugin:app|version", "plugin:app|get_version", "app_version"):
         return "3.0.6"
@@ -919,7 +982,7 @@ async def handle_bridge_command(command: str, request: Request):
             "height": ("height",),
             "hrv": ("hrv", "hrv_sdnn"),
             "hrv_rmssd": ("hrv_rmssd",),
-            "spo2": ("spo2", "blood_oxygen", "oxygen"),
+            "spo2": ("spo2", "spo2_auto", "spo2_avg", "blood_oxygen", "blood_oxygen_auto", "blood_oxygen_avg", "oxygen", "oxygen_saturation", "spo2_apnea_low"),
             "blood_pressure_systolic": ("blood_pressure_systolic", "systolic"),
             "blood_pressure_diastolic": ("blood_pressure_diastolic", "diastolic"),
             "blood_pressure_pulse": ("blood_pressure_pulse", "bp_pulse"),
@@ -948,6 +1011,36 @@ async def handle_bridge_command(command: str, request: Request):
                         points.append({
                             "date": r["dt"],
                             "value": float(r["val"]),
+                            "min": None,
+                            "max": None,
+                            "samples": None
+                        })
+            elif m == "training_load":
+                source = "workouts"
+                w_rows = query_all(
+                    "SELECT substr(start_time, 1, 10) as dt, "
+                    "SUM(COALESCE(CASE WHEN training_load IS NOT NULL AND training_load > 0 THEN training_load ELSE NULL END, "
+                    "             CASE WHEN calories IS NOT NULL AND calories > 0 THEN calories / 10.0 ELSE NULL END, "
+                    "             (COALESCE(moving_seconds, CAST((julianday(end_time) - julianday(start_time)) * 86400 AS INTEGER), 1800) / 60.0) * (COALESCE(avg_hr, 120) / 120.0), "
+                    "             25.0)) as val "
+                    "FROM workouts WHERE substr(start_time, 1, 10) BETWEEN ? AND ? "
+                    "GROUP BY dt HAVING val > 0 ORDER BY dt ASC",
+                    (start_str, end_str)
+                )
+                if not w_rows:
+                    w_rows = query_all(
+                        "SELECT substr(start_time, 1, 10) as dt, "
+                        "SUM(COALESCE(CASE WHEN training_load IS NOT NULL AND training_load > 0 THEN training_load ELSE NULL END, "
+                        "             CASE WHEN calories IS NOT NULL AND calories > 0 THEN calories / 10.0 ELSE NULL END, "
+                        "             (COALESCE(moving_seconds, CAST((julianday(end_time) - julianday(start_time)) * 86400 AS INTEGER), 1800) / 60.0) * (COALESCE(avg_hr, 120) / 120.0), "
+                        "             25.0)) as val "
+                        "FROM workouts GROUP BY dt HAVING val > 0 ORDER BY dt ASC"
+                    )
+                for r in w_rows:
+                    if r.get("val") is not None:
+                        points.append({
+                            "date": r["dt"],
+                            "value": round(float(r["val"]), 1),
                             "min": None,
                             "max": None,
                             "samples": None
@@ -1156,8 +1249,8 @@ async def handle_bridge_command(command: str, request: Request):
             "ORDER BY timestamp ASC",
             (cutoff_str,)
         )
-        # Respaldo: si en 24h no hay muestras, buscar en las últimas 48h para mostrar la curva más reciente si el último sync fue ayer
-        if not rows and hours == 24:
+        # Respaldo: si en 24h no hay muestras, buscar en las últimas 48h o el último bloque de 24h registrado
+        if not rows:
             fallback_cutoff = (datetime.utcnow() - timedelta(hours=48)).strftime("%Y-%m-%dT%H:%M:%S")
             rows = query_all(
                 "SELECT timestamp, value FROM metric_samples "
@@ -1165,6 +1258,21 @@ async def handle_bridge_command(command: str, request: Request):
                 "ORDER BY timestamp ASC",
                 (fallback_cutoff,)
             )
+        if not rows:
+            last_sample = query_one("SELECT MAX(timestamp) as max_ts FROM metric_samples WHERE metric = 'stress'")
+            if last_sample and last_sample.get("max_ts"):
+                try:
+                    max_ts_str = str(last_sample["max_ts"])[:19].replace(' ', 'T')
+                    max_dt = datetime.fromisoformat(max_ts_str)
+                    block_start = (max_dt - timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%S")
+                    rows = query_all(
+                        "SELECT timestamp, value FROM metric_samples "
+                        "WHERE metric = 'stress' AND REPLACE(substr(timestamp, 1, 19), ' ', 'T') >= ? "
+                        "ORDER BY timestamp ASC",
+                        (block_start,)
+                    )
+                except Exception:
+                    pass
         return [{"timestamp": r["timestamp"], "value": int(round(r["value"]))} for r in rows if r.get("value") is not None]
 
     elif command == "get_daily_heart_rate_extremes":
@@ -1195,6 +1303,19 @@ async def handle_bridge_command(command: str, request: Request):
         end_date = datetime.now().date()
         start_date = end_date - timedelta(days=days - 1)
         history_start = start_date - timedelta(days=27)
+
+        # Si no hay entrenamientos en los últimos 28 días pero sí en el historial,
+        # anclar el rango al último entrenamiento registrado para que la gráfica no sea vacía
+        max_w = query_one("SELECT MAX(substr(start_time, 1, 10)) as m FROM workouts")
+        if max_w and max_w.get("m"):
+            try:
+                latest_w_date = datetime.strptime(max_w["m"][:10], "%Y-%m-%d").date()
+                if latest_w_date < history_start:
+                    end_date = latest_w_date
+                    start_date = end_date - timedelta(days=days - 1)
+                    history_start = start_date - timedelta(days=27)
+            except Exception:
+                pass
 
         w_rows = query_all(
             "SELECT substr(start_time, 1, 10) as dt, "
@@ -2560,7 +2681,30 @@ async def handle_bridge_command(command: str, request: Request):
                 "model": "max_hr",
                 "modelLabel": "% FC Máxima",
                 "formula": "bpm / max_hr",
-                "bases": [],
+                "bases": [
+                    {
+                        "id": "observed_max",
+                        "kind": "max_hr",
+                        "label": "Frecuencia cardíaca más alta registrada",
+                        "value": max_val,
+                        "unit": "bpm",
+                        "source": "observed",
+                        "measuredAt": None,
+                        "note": None,
+                        "noteCount": 0
+                    },
+                    {
+                        "id": "computed_resting",
+                        "kind": "resting_hr",
+                        "label": "Frecuencia cardíaca en reposo calculada",
+                        "value": resting_val,
+                        "unit": "bpm",
+                        "source": "computed",
+                        "measuredAt": None,
+                        "note": None,
+                        "noteCount": resting_cnt
+                    }
+                ],
                 "zones": [
                     {"zone": 1, "label": "Zona 1", "minBpm": z1_min, "maxBpm": z1_max, "seconds": z1_sec},
                     {"zone": 2, "label": "Zona 2", "minBpm": z2_min, "maxBpm": z2_max, "seconds": z2_sec},

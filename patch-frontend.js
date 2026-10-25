@@ -1503,9 +1503,15 @@ if (fs.existsSync(weeklyReportVuePath)) {
       "'weekly.resting_hr': '/heart?focus=resting_hr',",
       "'weekly.steps': '/activity',\n  'weekly.resting_hr': '/heart?focus=resting_hr',"
     );
-    fs.writeFileSync(weeklyReportVuePath, wrVue, 'utf8');
-    console.log('[Patch] Enlace de weekly.steps configurado en WeeklyReportCard.vue');
   }
+  if (!wrVue.includes("fact.metric === 'steps'")) {
+    wrVue = wrVue.replace(
+      "if (fact.metric === 'workout_count') return t.value.workoutCount(Math.round(value));",
+      "if (fact.metric === 'workout_count') return t.value.workoutCount(Math.round(value));\n  if (fact.metric === 'steps') return `${Math.round(value)} pasos`;"
+    );
+  }
+  fs.writeFileSync(weeklyReportVuePath, wrVue, 'utf8');
+  console.log('[Patch] Enlace de weekly.steps y formato seguro de pasos configurados en WeeklyReportCard.vue');
 }
 
 
