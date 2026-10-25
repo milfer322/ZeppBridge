@@ -104,6 +104,22 @@ def get_existing_tables() -> List[str]:
     finally:
         conn.close()
 
+def ensure_columns(conn: sqlite3.Connection, table_name: str, columns: List[tuple]):
+    """Añade columnas a una tabla si no existen para garantizar paridad con upstream."""
+    try:
+        cursor = conn.cursor()
+        cursor.execute(f"PRAGMA table_info({table_name})")
+        existing = {row[1] for row in cursor.fetchall()}
+        for col_name, col_type in columns:
+            if col_name not in existing:
+                try:
+                    cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN {col_name} {col_type};")
+                    print(f"[DB] Columna '{col_name}' añadida con éxito a '{table_name}'")
+                except Exception as ce:
+                    print(f"[DB] Aviso al añadir columna '{col_name}' a '{table_name}': {ce}")
+    except Exception as e:
+        print(f"[DB] Error comprobando columnas para '{table_name}': {e}")
+
 def ensure_tables():
     """Crea las tablas locales de correcciones y extensiones si no existen."""
     conn = get_db_write_connection()
@@ -130,6 +146,104 @@ def ensure_tables():
                     original_max_hr INTEGER
                 );
             """)
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS workout_pauses (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    workout_id TEXT NOT NULL,
+                    start_time TEXT NOT NULL,
+                    end_time TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    FOREIGN KEY(workout_id) REFERENCES workouts(workout_id) ON DELETE CASCADE
+                );
+            """)
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS workout_laps (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    workout_id TEXT NOT NULL,
+                    lap_index INTEGER NOT NULL,
+                    start_time TEXT NOT NULL,
+                    end_time TEXT NOT NULL,
+                    distance_m REAL NOT NULL,
+                    duration_seconds INTEGER NOT NULL,
+                    avg_hr INTEGER,
+                    max_hr INTEGER,
+                    FOREIGN KEY(workout_id) REFERENCES workouts(workout_id) ON DELETE CASCADE
+                );
+            """)
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS workout_splits (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    workout_id TEXT NOT NULL,
+                    split_index INTEGER NOT NULL,
+                    start_time TEXT NOT NULL,
+                    end_time TEXT NOT NULL,
+                    distance_m REAL NOT NULL,
+                    duration_seconds INTEGER NOT NULL,
+                    pace_min_per_km REAL,
+                    avg_hr INTEGER,
+                    max_hr INTEGER,
+                    elevation_gain_m REAL,
+                    elevation_loss_m REAL,
+                    partial INTEGER NOT NULL,
+                    FOREIGN KEY(workout_id) REFERENCES workouts(workout_id) ON DELETE CASCADE
+                );
+            """)
+
+            # Asegurar columnas añadidas en migraciones oficiales
+            ensure_columns(conn, "workouts", [
+                ("synced_at", "TEXT"),
+                ("gps_available", "INTEGER NOT NULL DEFAULT 0"),
+                ("sample_count", "INTEGER NOT NULL DEFAULT 0"),
+                ("zepp_source", "TEXT"),
+                ("zepp_type", "INTEGER"),
+                ("min_hr", "INTEGER"),
+                ("total_steps", "INTEGER"),
+                ("moving_seconds", "INTEGER"),
+                ("elevation_gain_m", "REAL"),
+                ("elevation_loss_m", "REAL"),
+                ("max_altitude_m", "REAL"),
+                ("min_altitude_m", "REAL"),
+                ("training_effect", "REAL"),
+                ("anaerobic_training_effect", "REAL"),
+                ("rpe", "INTEGER"),
+                ("avg_cadence_spm", "REAL"),
+                ("max_cadence_spm", "REAL"),
+                ("avg_stride_cm", "REAL"),
+                ("workout_type_source", "TEXT DEFAULT 'missing'"),
+                ("workout_type_override", "TEXT"),
+                ("workout_type_conflict", "TEXT"),
+                ("gear_id", "TEXT")
+            ])
+
+            ensure_columns(conn, "workout_samples", [
+                ("stride", "REAL"),
+                ("power_watts", "REAL"),
+                ("ground_contact_ms", "REAL"),
+                ("vertical_oscillation_mm", "REAL"),
+                ("vertical_ratio_pct", "REAL"),
+                ("equivalent_pace_s", "REAL"),
+                ("distance_m", "REAL")
+            ])
+
+            ensure_columns(conn, "sleep_sessions", [
+                ("rem_available", "INTEGER NOT NULL DEFAULT 1"),
+                ("synced_at", "TEXT"),
+                ("wake_count", "INTEGER"),
+                ("rem_seconds", "INTEGER"),
+                ("nap_total_seconds", "INTEGER"),
+                ("unmeasurable_seconds", "INTEGER"),
+                ("validation", "TEXT")
+            ])
+
+            ensure_columns(conn, "coverage_ledger", [
+                ("attempts", "INTEGER NOT NULL DEFAULT 0"),
+                ("last_attempt_at", "TEXT"),
+                ("error_code", "TEXT")
+            ])
+
             conn.commit()
         except Exception as e:
             print(f"[DB] Error creando tablas en ensure_tables: {e}")

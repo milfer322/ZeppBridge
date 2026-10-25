@@ -1199,29 +1199,92 @@ async def handle_bridge_command(command: str, request: Request):
 
     elif command == "get_metric_baselines":
         metrics = body.get("metrics", [])
-        end_date = datetime.now().date()
-        start_date = end_date - timedelta(days=27)
-        start_str = start_date.strftime("%Y-%m-%d")
-        end_str = end_date.strftime("%Y-%m-%d")
+        today = datetime.now().date()
+        today_str = today.strftime("%Y-%m-%d")
+        cutoff_date = today - timedelta(days=45)
+        cutoff_str = cutoff_date.strftime("%Y-%m-%d")
         baselines = []
+
+        def calc_median(lst):
+            n = len(lst)
+            if n % 2 == 1:
+                return lst[n // 2]
+            return (lst[n // 2 - 1] + lst[n // 2]) / 2.0
+
         for m in metrics:
-            r = query_one(
-                "SELECT AVG(value) as avg_val, COUNT(*) as cnt FROM daily_metrics "
-                "WHERE metric = ? AND date BETWEEN ? AND ?",
-                (m, start_str, end_str)
+            aliases = METRIC_ALIASES.get(m, [m])
+            in_clause = ",".join(["?"] * len(aliases))
+            rows = query_all(
+                f"SELECT date as dt, "
+                f"COALESCE(MAX(CASE WHEN source_scope = 'user_fused' THEN value END), MAX(value)) as val "
+                f"FROM daily_metrics WHERE metric IN ({in_clause}) AND date BETWEEN ? AND ? "
+                f"GROUP BY date ORDER BY date ASC",
+                list(aliases) + [cutoff_str, today_str]
             )
-            if not r or not r.get("cnt"):
-                r = query_one(
-                    "SELECT AVG(value) as avg_val, COUNT(DISTINCT substr(timestamp, 1, 10)) as cnt FROM metric_samples "
-                    "WHERE metric = ? AND substr(timestamp, 1, 10) BETWEEN ? AND ?",
-                    (m, start_str, end_str)
+            points = []
+            for r in rows:
+                if r.get("val") is not None:
+                    try:
+                        d = datetime.strptime(r["dt"], "%Y-%m-%d").date()
+                        points.append((d, float(r["val"])))
+                    except Exception:
+                        pass
+            if not points:
+                s_rows = query_all(
+                    f"SELECT substr(timestamp, 1, 10) as dt, AVG(value) as val "
+                    f"FROM metric_samples WHERE metric IN ({in_clause}) AND substr(timestamp, 1, 10) BETWEEN ? AND ? "
+                    f"GROUP BY dt ORDER BY dt ASC",
+                    list(aliases) + [cutoff_str, today_str]
                 )
-            cnt = r.get("cnt") or 0 if r else 0
-            avg_val = round(float(r["avg_val"]), 1) if r and r.get("avg_val") is not None else None
+                for r in s_rows:
+                    if r.get("val") is not None:
+                        try:
+                            d = datetime.strptime(r["dt"], "%Y-%m-%d").date()
+                            points.append((d, float(r["val"])))
+                        except Exception:
+                            pass
+
+            if not points:
+                continue
+
+            points.sort(key=lambda x: x[0])
+            latest_date, latest = points[-1]
+
+            if latest_date < today - timedelta(days=3):
+                continue
+
+            from_date = latest_date - timedelta(days=28)
+            window = [v for d, v in points if from_date <= d < latest_date]
+            if len(window) < 14:
+                continue
+
+            window.sort()
+            center = calc_median(window)
+            deviations = sorted([abs(v - center) for v in window])
+            spread = max(1.4826 * calc_median(deviations), abs(center) * 0.02, 1e-9)
+            delta = latest - center
+            ratio = delta / spread
+
+            if ratio >= 2.0:
+                direction = "above"
+                msg_code = "ui.metric_baseline.above"
+            elif ratio <= -2.0:
+                direction = "below"
+                msg_code = "ui.metric_baseline.below"
+            else:
+                direction = "usual"
+                msg_code = "ui.metric_baseline.usual"
+
             baselines.append({
                 "metric": m,
-                "baseline": avg_val if cnt >= 5 else None,
-                "samples": cnt
+                "latest_date": latest_date.strftime("%Y-%m-%d"),
+                "latest": round(latest, 1),
+                "median": round(center, 1),
+                "spread": round(spread, 2),
+                "days": len(window),
+                "direction": direction,
+                "delta": round(delta, 1),
+                "message_code": msg_code
             })
         return baselines
 
@@ -1516,23 +1579,84 @@ async def handle_bridge_command(command: str, request: Request):
     elif command == "get_hourly_steps":
         start_date = body.get("start", datetime.now().strftime("%Y-%m-%d"))
         end_date = body.get("end", start_date)
-        rows = query_all(
-            "SELECT substr(timestamp, 1, 10) as dt, CAST(strftime('%H', timestamp) AS INTEGER) as hr, MAX(value) as stp "
-            "FROM metric_samples WHERE metric = 'steps_hourly' "
-            "AND substr(timestamp, 1, 10) BETWEEN ? AND ? "
-            "GROUP BY 1, 2 ORDER BY 1, 2",
-            (start_date, end_date)
-        )
         res = []
-        if rows:
-            res = [{"date": r["dt"], "hour": r["hr"], "steps": int(round(r["stp"]))} for r in rows]
-        else:
+
+        # 1. Intentar decodificar minutos reales desde raw_records (band_data:detail)
+        try:
+            raw_rows = query_all(
+                "SELECT source_key, payload, payload_zip FROM raw_records "
+                "WHERE source_key LIKE 'band_data:detail:%' ORDER BY fetched_at DESC, id DESC"
+            )
+            days_data = {}
+            seen = set()
+            for r_raw in raw_rows:
+                payload_str = r_raw.get("payload")
+                if not payload_str and r_raw.get("payload_zip"):
+                    try:
+                        import gzip
+                        payload_str = gzip.decompress(r_raw["payload_zip"]).decode("utf-8")
+                    except Exception:
+                        pass
+                if not payload_str:
+                    continue
+                try:
+                    data_obj = json.loads(payload_str)
+                    items = data_obj.get("data") if isinstance(data_obj, dict) else (data_obj if isinstance(data_obj, list) else [])
+                    if not isinstance(items, list):
+                        continue
+                    for item in items:
+                        if not isinstance(item, dict):
+                            continue
+                        d_str = item.get("date_time")
+                        dev_id = str(item.get("device_id") or "")
+                        if not d_str or d_str < start_date or d_str > end_date:
+                            continue
+                        key_pair = (d_str, dev_id)
+                        if key_pair in seen:
+                            continue
+                        seen.add(key_pair)
+                        b64_data = item.get("data")
+                        if not b64_data or not isinstance(b64_data, str):
+                            continue
+                        raw_bytes = base64.b64decode(b64_data.strip())
+                        if len(raw_bytes) != 1440 * 8:
+                            continue
+                        if d_str not in days_data:
+                            days_data[d_str] = [0.0] * 24
+                        for minute in range(1440):
+                            hr = minute // 60
+                            days_data[d_str][hr] += float(raw_bytes[minute * 8 + 2])
+                except Exception:
+                    continue
+
+            if days_data:
+                for d_str in sorted(days_data.keys()):
+                    for hr, stp in enumerate(days_data[d_str]):
+                        if stp > 0:
+                            res.append({"date": d_str, "hour": hr, "steps": int(round(stp))})
+        except Exception as e:
+            print(f"[HourlySteps] Error decodificando raw_records: {e}")
+
+        # 2. Si no hubo datos brutos, buscar en metric_samples steps_hourly
+        if not res:
+            rows = query_all(
+                "SELECT substr(timestamp, 1, 10) as dt, CAST(strftime('%H', timestamp) AS INTEGER) as hr, MAX(value) as stp "
+                "FROM metric_samples WHERE metric = 'steps_hourly' "
+                "AND substr(timestamp, 1, 10) BETWEEN ? AND ? "
+                "GROUP BY 1, 2 ORDER BY 1, 2",
+                (start_date, end_date)
+            )
+            if rows:
+                res = [{"date": r["dt"], "hour": r["hr"], "steps": int(round(r["stp"]))} for r in rows if r.get("stp") is not None and r["stp"] > 0]
+
+        # 3. Fallback a daily_metrics si no hay ninguna serie horaria
+        if not res:
             d_rows = query_all(
                 "SELECT date, value FROM daily_metrics WHERE metric = 'steps' AND date BETWEEN ? AND ?",
                 (start_date, end_date)
             )
             for d in d_rows:
-                total_s = int(round(d["value"]))
+                total_s = int(round(d["value"])) if d.get("value") is not None else 0
                 if total_s > 0:
                     per_hr = max(1, total_s // 14)
                     for h in range(8, 22):
@@ -1579,7 +1703,7 @@ async def handle_bridge_command(command: str, request: Request):
         wid = body.get("workoutId", "")
         w = query_one("SELECT * FROM workouts WHERE workout_id = ?", (wid,))
         samples_rows = query_all(
-            "SELECT timestamp, heart_rate, pace, speed, cadence, altitude "
+            "SELECT timestamp, heart_rate, pace, speed, cadence, altitude, power_watts, ground_contact_ms, vertical_oscillation_mm, vertical_ratio_pct "
             "FROM workout_samples WHERE workout_id = ? ORDER BY timestamp ASC",
             (wid,)
         )
@@ -1590,7 +1714,11 @@ async def handle_bridge_command(command: str, request: Request):
                 "speed": s.get("speed"),
                 "pace": s.get("pace"),
                 "cadence": s.get("cadence"),
-                "altitude_m": s.get("altitude")
+                "altitude_m": s.get("altitude"),
+                "power_watts": s.get("power_watts"),
+                "ground_contact_ms": s.get("ground_contact_ms"),
+                "vertical_oscillation_mm": s.get("vertical_oscillation_mm"),
+                "vertical_ratio_pct": s.get("vertical_ratio_pct")
             }
             for s in samples_rows
         ]
@@ -1611,48 +1739,61 @@ async def handle_bridge_command(command: str, request: Request):
         ]
 
         split_rows = query_all(
-            "SELECT split_index, distance_m, duration_seconds, partial FROM workout_splits WHERE workout_id = ? ORDER BY split_index ASC",
+            "SELECT split_index, start_time, end_time, distance_m, duration_seconds, pace_min_per_km, avg_hr, max_hr, elevation_gain_m, elevation_loss_m, partial "
+            "FROM workout_splits WHERE workout_id = ? ORDER BY split_index ASC",
             (wid,)
         )
         splits = [
             {
-                "split_index": int(s["split_index"]),
+                "index": int(s["split_index"]),
+                "start_time": s["start_time"],
+                "end_time": s["end_time"],
                 "distance_m": float(s["distance_m"]),
                 "duration_seconds": int(s["duration_seconds"]),
+                "pace_min_per_km": s.get("pace_min_per_km"),
+                "avg_hr": s.get("avg_hr"),
+                "max_hr": s.get("max_hr"),
+                "elevation_gain_m": s.get("elevation_gain_m"),
+                "elevation_loss_m": s.get("elevation_loss_m"),
                 "partial": bool(s.get("partial", 0))
             }
             for s in split_rows
         ] if split_rows else []
 
         pause_rows = query_all(
-            "SELECT start_time, end_time, duration_seconds FROM workout_pauses WHERE workout_id = ? ORDER BY start_time ASC",
+            "SELECT start_time, end_time, kind FROM workout_pauses WHERE workout_id = ? ORDER BY start_time ASC",
             (wid,)
         )
         pauses = [
             {
                 "start_time": p["start_time"],
                 "end_time": p["end_time"],
-                "duration_seconds": int(p.get("duration_seconds") or 0)
+                "kind": p.get("kind") or "manual"
             }
             for p in pause_rows
         ] if pause_rows else []
 
         lap_rows = query_all(
-            "SELECT lap_index, start_time, end_time, distance_meters, calories, avg_hr, max_hr FROM workout_laps WHERE workout_id = ? ORDER BY lap_index ASC",
+            "SELECT lap_index, start_time, end_time, distance_m, duration_seconds, avg_hr, max_hr FROM workout_laps WHERE workout_id = ? ORDER BY lap_index ASC",
             (wid,)
         )
         laps = [
             {
-                "lap_index": int(l["lap_index"]),
+                "index": int(l["lap_index"]),
                 "start_time": l["start_time"],
                 "end_time": l["end_time"],
-                "distance_meters": l.get("distance_meters"),
-                "calories": l.get("calories"),
+                "distance_m": float(l.get("distance_m") or 0.0),
+                "duration_seconds": int(l.get("duration_seconds") or 0),
                 "avg_hr": l.get("avg_hr"),
                 "max_hr": l.get("max_hr")
             }
             for l in lap_rows
         ] if lap_rows else []
+
+        moving_secs = float(w.get("moving_seconds") or 0) if w else 0.0
+        dist_m = float(w.get("distance_meters") or 0) if w else 0.0
+        calculated_pace = round(moving_secs / (dist_m / 1000.0), 1) if dist_m > 0 and moving_secs > 0 else (w.get("avg_pace") if w else None)
+        p_watts = [s["power_watts"] for s in samples if s.get("power_watts") is not None]
 
         return {
             "workout_id": wid,
@@ -1662,14 +1803,14 @@ async def handle_bridge_command(command: str, request: Request):
             "splits": splits,
             "laps": laps,
             "summary": {
-                "average_pace": w.get("avg_pace") if w else None,
+                "average_pace": calculated_pace,
                 "average_cadence": w.get("avg_cadence_spm") if w else None,
                 "max_cadence": w.get("max_cadence_spm") if w else None,
                 "average_stride_cm": w.get("avg_stride_cm") if w else None,
                 "elevation_gain_m": w.get("elevation_gain_m") if w else None,
                 "elevation_loss_m": w.get("elevation_loss_m") if w else None,
-                "average_power_watts": None,
-                "max_power_watts": None,
+                "average_power_watts": round(sum(p_watts) / len(p_watts), 1) if p_watts else None,
+                "max_power_watts": max(p_watts) if p_watts else None,
                 "average_ground_contact_ms": None,
                 "average_vertical_oscillation_mm": None,
                 "average_vertical_ratio_pct": None,
@@ -1758,12 +1899,26 @@ async def handle_bridge_command(command: str, request: Request):
 
         try:
             cnt_rows = query_all(
-                "SELECT zepp_type, COUNT(*) as cnt FROM workouts WHERE zepp_type IS NOT NULL AND (workout_type LIKE 'unknown:%' OR workout_type = 'unknown') GROUP BY zepp_type"
+                "SELECT workout_type, COUNT(*) as cnt FROM workouts WHERE workout_type LIKE 'unknown:%' GROUP BY workout_type"
             )
             for r in cnt_rows:
+                wt = r.get("workout_type") or ""
+                if wt.startswith("unknown:"):
+                    part = wt.split("unknown:")[1].strip()
+                    if part.isdigit():
+                        c = int(part)
+                        workout_counts[c] = workout_counts.get(c, 0) + int(r.get("cnt") or 0)
+        except Exception:
+            pass
+
+        try:
+            cnt_rows2 = query_all(
+                "SELECT zepp_type, COUNT(*) as cnt FROM workouts WHERE zepp_type IS NOT NULL AND zepp_type > 0 GROUP BY zepp_type"
+            )
+            for r in cnt_rows2:
                 code = r.get("zepp_type")
                 if code is not None:
-                    workout_counts[int(code)] = int(r.get("cnt") or 0)
+                    workout_counts[int(code)] = max(workout_counts.get(int(code), 0), int(r.get("cnt") or 0))
         except Exception:
             pass
 
@@ -2201,6 +2356,8 @@ async def handle_bridge_command(command: str, request: Request):
                 "timezone": "Europe/Madrid"
             })
 
+        save_json_file("device_profiles.json", profiles)
+
         return {
             "profiles": profiles,
             "cache": {
@@ -2214,21 +2371,64 @@ async def handle_bridge_command(command: str, request: Request):
         }
 
     elif command == "get_device_profile":
-        return {
-            "name": "Amazfit Device",
-            "canonical_name": "Amazfit",
-            "display_name": "Amazfit Watch",
-            "catalog_id": "amazfit_watch",
-            "kind": "watch",
-            "image_key": None,
-            "match_status": "exact",
-            "has_local_data": True,
-            "last_data_at": datetime.utcnow().isoformat() + "Z",
-            "firmware": "1.0.0",
-            "serial": "ZEPP001",
-            "device_id": "dev_001",
-            "timezone": "Europe/Madrid"
-        }
+        target_did = body.get("deviceId") or body.get("device_id")
+        cached = load_json_file("device_profiles.json", None)
+        profiles = []
+        if isinstance(cached, list):
+            profiles = cached
+        elif isinstance(cached, dict) and "profiles" in cached:
+            profiles = cached["profiles"]
+        
+        # Si no hay perfiles en caché, buscar en la tabla device_identities de SQLite
+        if not profiles:
+            try:
+                d_rows = query_all("SELECT * FROM device_identities")
+                for r in d_rows:
+                    profiles.append({
+                        "name": r.get("name") or "Amazfit Smartwatch",
+                        "canonical_name": r.get("name") or "Amazfit Smartwatch",
+                        "display_name": r.get("alias") or r.get("name") or "Amazfit Smartwatch",
+                        "catalog_id": "amazfit",
+                        "kind": "watch",
+                        "image_key": None,
+                        "match_status": "exact",
+                        "has_local_data": True,
+                        "last_data_at": r.get("updated_at") or (datetime.utcnow().isoformat() + "Z"),
+                        "firmware": r.get("firmware") or "1.0",
+                        "serial": r.get("serial") or "SN",
+                        "device_id": r.get("device_id") or "dev_001",
+                        "timezone": r.get("timezone") or "Europe/Madrid"
+                    })
+            except Exception:
+                pass
+
+        matched = None
+        if target_did and profiles:
+            for p in profiles:
+                if p.get("device_id") == target_did or p.get("serial") == target_did:
+                    matched = p
+                    break
+        if not matched and profiles:
+            matched = profiles[0]
+
+        if not matched:
+            now_iso = datetime.utcnow().isoformat() + "Z"
+            matched = {
+                "name": "Amazfit Smartwatch",
+                "canonical_name": "Amazfit Smartwatch",
+                "display_name": "Amazfit Smartwatch",
+                "catalog_id": "amazfit",
+                "kind": "watch",
+                "image_key": None,
+                "match_status": "exact",
+                "has_local_data": True,
+                "last_data_at": now_iso,
+                "firmware": "1.0",
+                "serial": "SN",
+                "device_id": target_did or "dev_001",
+                "timezone": "Europe/Madrid"
+            }
+        return matched
 
     elif command == "set_device_model_override":
         return None
@@ -2268,10 +2468,11 @@ async def handle_bridge_command(command: str, request: Request):
 
     elif command == "get_coverage_ledger":
         ledger = load_json_file("coverage_ledger.json", None)
+        today = datetime.utcnow().strftime("%Y-%m-%d")
         if not ledger:
             return {
-                "requested_from": None,
-                "requested_to": None,
+                "requested_from": "2010-01-01",
+                "requested_to": today,
                 "streams": [],
                 "total_chunks": 0,
                 "completed_chunks": 0,
@@ -2279,6 +2480,8 @@ async def handle_bridge_command(command: str, request: Request):
                 "failed_chunks_detail": [],
                 "needs_manual_retry": False
             }
+        if ledger.get("complete") and not ledger.get("requested_from"):
+            ledger["requested_from"] = "2010-01-01"
         return ledger
 
     elif command == "reset_coverage_ledger":
@@ -3803,8 +4006,13 @@ async def handle_bridge_command(command: str, request: Request):
         stored = feels.get(wid, {}) if isinstance(feels, dict) else {}
 
         # Comprobar si el reloj registró RPE oficial en workouts.rpe
-        w_row = query_one("SELECT rpe FROM workouts WHERE workout_id = ?", (wid,))
-        watch_rpe = int(w_row["rpe"]) if w_row and w_row.get("rpe") is not None else None
+        watch_rpe = None
+        try:
+            w_row = query_one("SELECT rpe FROM workouts WHERE workout_id = ?", (wid,))
+            if w_row and w_row.get("rpe") is not None:
+                watch_rpe = int(w_row["rpe"])
+        except Exception:
+            pass
 
         # Si el usuario ya marcó su esfuerzo, respetarlo; si no lo ha tocado, prellenar con el del reloj
         rpe_val = stored.get("rpe")

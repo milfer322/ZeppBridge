@@ -229,7 +229,7 @@
       }
 
       // 3. Manejo de URLs y Opener
-      if (command.includes('opener') || command === 'open_url') {
+      if (command.includes('opener') || command === 'open_url' || command === 'open_external_url') {
         const url = args.url || args.path;
         if (url && typeof url === 'string' && url.startsWith('http')) {
           console.log('[Web IPC] Abriendo enlace solicitado:', url);
@@ -237,8 +237,14 @@
           if (/gemini\.google\.com|chatgpt\.com|claude\.ai|kimi\.moonshot|deepseek\.com/i.test(url)) {
             showAiHandoffNotice(url);
           }
-          return null;
         }
+        return null;
+      }
+      if (command.includes('webview|set_webview_zoom')) {
+        return null;
+      }
+      if (command.includes('webview|get_webview_zoom')) {
+        return 1.0;
       }
 
       // 4. Manejo de diálogos
