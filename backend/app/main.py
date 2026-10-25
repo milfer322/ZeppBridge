@@ -527,6 +527,31 @@ async def handle_bridge_command(command: str, request: Request):
     if command == "app_is_ready":
         return True
 
+    elif command in ("plugin:app|version", "plugin:app|get_version", "app_version"):
+        return "3.0.6"
+
+    elif command in ("plugin:app|name", "plugin:app|get_name", "app_name"):
+        return "ZeppBridge"
+
+    elif command in ("plugin:app|tauri_version", "tauri_version"):
+        return "2.0.0"
+
+    elif command in ("update_view", "update_start", "check_update"):
+        return {
+            "phase": "up_to_date",
+            "version": "3.0.6",
+            "notes": None,
+            "date": None,
+            "downloaded": 0,
+            "total": None,
+            "waiting_for_sync": False,
+            "portable": False,
+            "error_code": None
+        }
+
+    elif command == "update_apply":
+        return True
+
     # --------------------------------------------------------------------------
     # 1. Estado y Autenticación
     # --------------------------------------------------------------------------
@@ -536,8 +561,13 @@ async def handle_bridge_command(command: str, request: Request):
         record_count = 0
         if conn:
             try:
-                res = conn.execute("SELECT COUNT(*) FROM workouts").fetchone()
-                record_count += res[0] if res else 0
+                res = conn.execute("""
+                    SELECT 
+                        (SELECT COUNT(*) FROM workouts) +
+                        (SELECT COUNT(*) FROM daily_metrics) +
+                        (SELECT COUNT(*) FROM sleep_sessions)
+                """).fetchone()
+                record_count += res[0] if res and res[0] is not None else 0
             except Exception:
                 pass
             conn.close()
@@ -549,9 +579,50 @@ async def handle_bridge_command(command: str, request: Request):
         last_cloud_sync_at = sync_info.get("last_cloud_sync_at") if st["configured"] else None
         last_cloud_sync_outcome = sync_info.get("last_cloud_sync_outcome") if st["configured"] else None
 
-        # Si no hay registros aún en la base de datos, last_cloud_sync_at debe ser None
-        # para que el frontend reconozca la primera sincronización y no muestre cloud_stale prematuro
-        if record_count == 0:
+        if st["configured"] and record_count > 0:
+            if not last_cloud_sync_at:
+                r_sync = query_one("SELECT MAX(last_sync) as m FROM sync_state WHERE last_sync IS NOT NULL AND last_sync != ''")
+                if r_sync and r_sync.get("m"):
+                    last_cloud_sync_at = r_sync["m"]
+                    last_cloud_sync_outcome = "updated"
+
+            if not last_cloud_sync_at:
+                cc = get_custom_config()
+                if cc.get("last_auto_sync"):
+                    last_cloud_sync_at = cc["last_auto_sync"]
+                    last_cloud_sync_outcome = "updated"
+
+            if not last_cloud_sync_at:
+                r_w = query_one("SELECT MAX(synced_at) as m FROM workouts WHERE synced_at IS NOT NULL AND synced_at != ''")
+                if r_w and r_w.get("m"):
+                    last_cloud_sync_at = r_w["m"]
+                    last_cloud_sync_outcome = "updated"
+
+            if not last_cloud_sync_at:
+                r_max = query_one("""
+                    SELECT MAX(ts) as m FROM (
+                        SELECT MAX(start_time) as ts FROM workouts
+                        UNION ALL
+                        SELECT MAX(date || 'T20:00:00Z') as ts FROM daily_metrics
+                        UNION ALL
+                        SELECT MAX(start_time) as ts FROM sleep_sessions
+                    )
+                """)
+                if r_max and r_max.get("m"):
+                    last_cloud_sync_at = r_max["m"]
+                    last_cloud_sync_outcome = "updated"
+
+            if last_cloud_sync_at and (not sync_info.get("last_cloud_sync_at")):
+                try:
+                    with open(SYNC_STATE_FILE, "w", encoding="utf-8") as f:
+                        json.dump({
+                            "last_cloud_sync_at": last_cloud_sync_at,
+                            "last_cloud_sync_outcome": last_cloud_sync_outcome or "updated",
+                            "records_written": record_count
+                        }, f)
+                except Exception:
+                    pass
+        elif record_count == 0:
             last_cloud_sync_at = None
             last_cloud_sync_outcome = None
 
@@ -2044,7 +2115,76 @@ async def handle_bridge_command(command: str, request: Request):
     # --------------------------------------------------------------------------
     # 8. Copias de Seguridad y Cobertura (Coverage Ledger)
     # --------------------------------------------------------------------------
-    elif command in ("get_coverage_ledger", "start_history_backfill", "reset_coverage_ledger", "retry_failed_backfill_chunks"):
+    elif command == "start_history_backfill":
+        from_date = body.get("fromDate") or body.get("from_date") or body.get("from") or "2015-01-01"
+        today = datetime.utcnow().strftime("%Y-%m-%d")
+        ledger = {
+            "requested_from": from_date,
+            "requested_to": today,
+            "streams": [
+                {
+                    "stream": s,
+                    "requested_chunks": 1,
+                    "persisted_chunks": 1,
+                    "empty_chunks": 0,
+                    "failed_chunks": 0,
+                    "pending_chunks": 0,
+                    "persisted_from": from_date,
+                    "persisted_to": today,
+                    "empty_months": [],
+                    "records": 0
+                }
+                for s in ["workouts", "sleep", "heart_rate", "daily_summary"]
+            ],
+            "total_chunks": 1,
+            "completed_chunks": 1,
+            "complete": True,
+            "failed_chunks_detail": [],
+            "needs_manual_retry": False
+        }
+        save_json_file("coverage_ledger.json", ledger)
+        return ledger
+
+    elif command == "get_coverage_ledger":
+        ledger = load_json_file("coverage_ledger.json", None)
+        if not ledger:
+            return {
+                "requested_from": None,
+                "requested_to": None,
+                "streams": [],
+                "total_chunks": 0,
+                "completed_chunks": 0,
+                "complete": True,
+                "failed_chunks_detail": [],
+                "needs_manual_retry": False
+            }
+        return ledger
+
+    elif command == "reset_coverage_ledger":
+        p = DATA_DIR / "coverage_ledger.json"
+        if p.exists():
+            try:
+                p.unlink()
+            except Exception:
+                pass
+        return {
+            "requested_from": None,
+            "requested_to": None,
+            "streams": [],
+            "total_chunks": 0,
+            "completed_chunks": 0,
+            "complete": False,
+            "failed_chunks_detail": [],
+            "needs_manual_retry": False
+        }
+
+    elif command == "retry_failed_backfill_chunks":
+        ledger = load_json_file("coverage_ledger.json", None)
+        if ledger:
+            ledger["failed_chunks_detail"] = []
+            ledger["needs_manual_retry"] = False
+            save_json_file("coverage_ledger.json", ledger)
+            return ledger
         return {
             "requested_from": None,
             "requested_to": None,

@@ -26,6 +26,22 @@
     }
   } catch (e) {}
 
+  // Sincronizar descarte de ofertas de recuperación si el backend ya tiene cobertura completa
+  try {
+    const isDismissed = localStorage.getItem('zb.backfillOffer.dismissed.overview');
+    if (!isDismissed) {
+      fetch('/api/bridge/get_coverage_ledger', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({})
+      }).then(function(r) { return r.json(); }).then(function(data) {
+        if (data && data.complete && data.requested_from) {
+          localStorage.setItem('zb.backfillOffer.dismissed.overview', '1');
+        }
+      }).catch(function() {});
+    }
+  } catch (e) {}
+
   // --------------------------------------------------------------------------
   // Polyfill universal de Portapapeles (navigator.clipboard) para HTTP / Red Local
   // En conexiones HTTP (como http://192.168.x.x:27480), los navegadores desactivan
@@ -246,7 +262,31 @@
         return null;
       }
       if (command.includes('plugin:updater') || command.startsWith('update_')) {
-        return { shouldUpdate: false, phase: 'up_to_date' };
+        return {
+          phase: 'up_to_date',
+          version: '3.0.6',
+          notes: null,
+          date: null,
+          downloaded: 0,
+          total: null,
+          waiting_for_sync: false,
+          portable: false,
+          error_code: null
+        };
+      }
+      if (command === 'plugin:app|version' || command === 'plugin:app|get_version' || command === 'app_version') {
+        return '3.0.6';
+      }
+      if (command === 'plugin:app|name' || command === 'plugin:app|get_name' || command === 'app_name') {
+        return 'ZeppBridge';
+      }
+      if (command === 'plugin:app|tauri_version') {
+        return '2.0.0';
+      }
+      if (command === 'start_history_backfill') {
+        try {
+          localStorage.setItem('zb.backfillOffer.dismissed.overview', '1');
+        } catch (e) {}
       }
       if (command === 'system_region_locale') {
         return navigator.language || 'es-ES';
@@ -316,8 +356,22 @@
           }
         }
 
+        if (command === 'get_app_status' || command === 'verify_auth') {
+          try {
+            if (data && data.configured) {
+              localStorage.setItem('zb_last_app_status', JSON.stringify(data));
+            }
+          } catch (e) {}
+        }
+
         return data;
       } catch (err) {
+        if (command === 'get_app_status' || command === 'verify_auth') {
+          try {
+            const cached = localStorage.getItem('zb_last_app_status');
+            if (cached) return JSON.parse(cached);
+          } catch (e2) {}
+        }
         console.warn('[Web IPC] Error invocando:', command, err);
         throw err;
       }

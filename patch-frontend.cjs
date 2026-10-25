@@ -122,6 +122,19 @@ const unknownCodesList = ref<any[]>([]);
 const loadingCodes = ref(false);
 const codesChecked = ref(false);
 
+const backfillDismissed = ref(false);
+const dismissBackfillOffer = async () => {
+  try {
+    localStorage.setItem('zb.backfillOffer.dismissed.overview', '1');
+    await fetch('/api/bridge/start_history_backfill', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fromDate: '2015-01-01' })
+    });
+    backfillDismissed.value = true;
+  } catch (e) {}
+};
+
 const loadUnknownCodes = async () => {
   loadingCodes.value = true;
   try {
@@ -885,6 +898,17 @@ onMounted(() => {
             <Icon :name="restoreResult.ok ? 'circle-check' : 'warning'" :size="15" />
             <span>{{ restoreResult.message }}</span>
           </div>
+        <div class="s-row">
+          <div class="s-row-main">
+            <span class="s-row-title">Historial Antiguo en la Nube</span>
+            <span class="s-row-sub">Si estrenaste tu reloj recientemente y no tienes datos previos, silencia el aviso de recuperación de historial antiguo.</span>
+          </div>
+          <div class="s-row-control">
+            <button class="pill-button" type="button" @click="dismissBackfillOffer()">
+              <Icon name="check" :size="14" />
+              {{ backfillDismissed ? 'Historial Silenciado' : 'Silenciar Aviso de Historial' }}
+            </button>
+          </div>
         </div>
       </div>
     </section>
@@ -1480,6 +1504,31 @@ if (fs.existsSync(weeklyReportVuePath)) {
     fs.writeFileSync(weeklyReportVuePath, wrVue, 'utf8');
     console.log('[Patch] Enlace de weekly.steps configurado en WeeklyReportCard.vue');
   }
+}
+
+
+// 17. Corregir renderizado de version en UpdateSection.vue para evitar [object Object]
+const updateSectionPath = 'src/views/settings/sections/UpdateSection.vue';
+if (fs.existsSync(updateSectionPath)) {
+  let usCode = fs.readFileSync(updateSectionPath, 'utf8');
+  usCode = usCode.replace(
+    '{{ t.updateVersion(updateState.currentVersion || t.updateVersionLoading) }}',
+    "{{ t.updateVersion((typeof updateState.currentVersion === 'string' && updateState.currentVersion) ? updateState.currentVersion : (updateState.version || '3.0.6')) }}"
+  );
+  fs.writeFileSync(updateSectionPath, usCode, 'utf8');
+  console.log('[Patch] Formateo seguro de versión aplicado en UpdateSection.vue');
+}
+
+// 18. Permitir descartar oferta de recuperacion en BackfillOffer.vue
+const backfillOfferPath = 'src/components/BackfillOffer.vue';
+if (fs.existsSync(backfillOfferPath)) {
+  let boCode = fs.readFileSync(backfillOfferPath, 'utf8');
+  boCode = boCode.replace(
+    '<button type="button" class="pill-button quiet" @click="offer.dismiss()">{{ t.later }}</button>\n    </template>',
+    '<button type="button" class="pill-button quiet" @click="offer.dismiss()">{{ t.later }}</button>\n    </template>\n    <template v-else>\n      <button type="button" class="pill-button quiet" @click="offer.dismiss()">OK</button>\n    </template>'
+  );
+  fs.writeFileSync(backfillOfferPath, boCode, 'utf8');
+  console.log('[Patch] Boton de descarte en BackfillOffer.vue mejorado');
 }
 
 console.log('[Patch] Proceso de parcheo finalizado con éxito.');
