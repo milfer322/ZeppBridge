@@ -17,7 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from starlette.background import BackgroundTask
 
-from .database import get_db_connection, query_all, query_one, DB_PATH, init_db_pragmas
+from .database import get_db_connection, get_db_write_connection, execute_write, query_all, query_one, DB_PATH, init_db_pragmas
 from .zepp_cli import (
     get_auth_status,
     get_stored_token,
@@ -67,6 +67,56 @@ def save_json_file(filename: str, data: Any):
     p = DATA_DIR / filename
     with open(p, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
+
+def normalize_workout_dict(r: Any, type_overrides: Optional[Dict[str, Any]] = None, feels: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    if not r:
+        return {}
+    d = dict(r)
+    wid = str(d.get("workout_id") or "")
+
+    if type_overrides is None:
+        type_overrides = load_json_file("workout_type_overrides.json", {}) or {}
+    if feels is None:
+        feels = load_json_file("workout_feels.json", {}) or {}
+
+    # 1. Type override
+    user_override = d.get("workout_type_override") or d.get("user_override") or type_overrides.get(wid)
+    d["user_override"] = user_override
+    d["workout_type_override"] = user_override
+
+    orig_type = d.get("workout_type") or d.get("effective_type") or "workout"
+    d["workout_type"] = orig_type
+    d["effective_type"] = user_override if user_override else orig_type
+    d["normalized_type"] = d.get("normalized_type") or orig_type
+    d["type_source"] = "user_override" if user_override else (d.get("workout_type_source") or d.get("type_source") or "numeric_mapped")
+
+    # 2. Duration seconds & moving seconds
+    moving_s = d.get("moving_seconds")
+    if moving_s is not None and moving_s > 0:
+        d["duration_seconds"] = int(moving_s)
+    elif d.get("start_time") and d.get("end_time"):
+        try:
+            st = datetime.fromisoformat(str(d["start_time"]).replace("Z", "+00:00"))
+            et = datetime.fromisoformat(str(d["end_time"]).replace("Z", "+00:00"))
+            d["duration_seconds"] = max(0, int((et - st).total_seconds()))
+        except Exception:
+            d["duration_seconds"] = int(d.get("duration_seconds") or 0)
+    else:
+        d["duration_seconds"] = int(d.get("duration_seconds") or 0)
+
+    # 3. RPE from feels if null in DB
+    feel_entry = feels.get(wid, {}) if isinstance(feels, dict) else {}
+    if d.get("rpe") is None and isinstance(feel_entry, dict) and feel_entry.get("rpe") is not None:
+        try:
+            d["rpe"] = int(feel_entry["rpe"])
+        except Exception:
+            pass
+
+    # 4. GPS available bool
+    if "gps_available" in d:
+        d["gps_available"] = bool(d["gps_available"])
+
+    return d
 
 # Cargar catálogo oficial de dispositivos Amazfit / Zepp
 CATALOG_PATH = Path("/app/catalog.json")
@@ -933,7 +983,7 @@ async def handle_bridge_command(command: str, request: Request):
                         "SELECT substr(start_time, 1, 10) as dt, "
                         "SUM(COALESCE(CASE WHEN training_load IS NOT NULL AND training_load > 0 THEN training_load ELSE NULL END, "
                         "             CASE WHEN calories IS NOT NULL AND calories > 0 THEN calories / 10.0 ELSE NULL END, "
-                        "             (duration_seconds / 60.0) * (COALESCE(avg_hr, 120) / 120.0))) as val "
+                        "             (COALESCE(moving_seconds, CAST((julianday(end_time) - julianday(start_time)) * 86400 AS INTEGER), 1800) / 60.0) * (COALESCE(avg_hr, 120) / 120.0))) as val "
                         "FROM workouts WHERE substr(start_time, 1, 10) BETWEEN ? AND ? "
                         "GROUP BY dt HAVING val > 0 ORDER BY dt ASC",
                         (start_str, end_str)
@@ -1079,7 +1129,7 @@ async def handle_bridge_command(command: str, request: Request):
             "SELECT substr(start_time, 1, 10) as dt, "
             "SUM(COALESCE(CASE WHEN training_load IS NOT NULL AND training_load > 0 THEN training_load ELSE NULL END, "
             "             CASE WHEN calories IS NOT NULL AND calories > 0 THEN calories / 10.0 ELSE NULL END, "
-            "             (COALESCE(duration_seconds, 1800) / 60.0) * (COALESCE(avg_hr, 120) / 120.0), "
+            "             (COALESCE(moving_seconds, CAST((julianday(end_time) - julianday(start_time)) * 86400 AS INTEGER), 1800) / 60.0) * (COALESCE(avg_hr, 120) / 120.0), "
             "             25.0)) as load "
             "FROM workouts WHERE substr(start_time, 1, 10) BETWEEN ? AND ? "
             "GROUP BY dt",
@@ -1101,7 +1151,7 @@ async def handle_bridge_command(command: str, request: Request):
                 "SELECT substr(start_time, 1, 10) as dt, "
                 "SUM(COALESCE(CASE WHEN training_load IS NOT NULL AND training_load > 0 THEN training_load ELSE NULL END, "
                 "             CASE WHEN calories IS NOT NULL AND calories > 0 THEN calories / 10.0 ELSE NULL END, "
-                "             (COALESCE(duration_seconds, 1800) / 60.0) * (COALESCE(avg_hr, 120) / 120.0), "
+                "             (COALESCE(moving_seconds, CAST((julianday(end_time) - julianday(start_time)) * 86400 AS INTEGER), 1800) / 60.0) * (COALESCE(avg_hr, 120) / 120.0), "
                 "             25.0)) as load "
                 "FROM workouts ORDER BY start_time DESC LIMIT 14"
             )
@@ -1176,7 +1226,7 @@ async def handle_bridge_command(command: str, request: Request):
         load_rows = query_all(
             "SELECT SUM(COALESCE(CASE WHEN training_load IS NOT NULL AND training_load > 0 THEN training_load ELSE NULL END, "
             "                    CASE WHEN calories IS NOT NULL AND calories > 0 THEN calories / 10.0 ELSE NULL END, "
-            "                    (COALESCE(duration_seconds, 1800) / 60.0) * (COALESCE(avg_hr, 120) / 120.0), "
+            "                    (COALESCE(moving_seconds, CAST((julianday(end_time) - julianday(start_time)) * 86400 AS INTEGER), 1800) / 60.0) * (COALESCE(avg_hr, 120) / 120.0), "
             "                    25.0)) as val "
             "FROM workouts WHERE substr(start_time, 1, 10) >= ?",
             (acute_start,)
@@ -1186,7 +1236,7 @@ async def handle_bridge_command(command: str, request: Request):
             latest_w = query_one(
                 "SELECT COALESCE(CASE WHEN training_load IS NOT NULL AND training_load > 0 THEN training_load ELSE NULL END, "
                 "                CASE WHEN calories IS NOT NULL AND calories > 0 THEN calories / 10.0 ELSE NULL END, "
-                "                (COALESCE(duration_seconds, 1800) / 60.0) * (COALESCE(avg_hr, 120) / 120.0), "
+                "                (COALESCE(moving_seconds, CAST((julianday(end_time) - julianday(start_time)) * 86400 AS INTEGER), 1800) / 60.0) * (COALESCE(avg_hr, 120) / 120.0), "
                 "                25.0) as val "
                 "FROM workouts ORDER BY start_time DESC LIMIT 1"
             )
@@ -1306,18 +1356,9 @@ async def handle_bridge_command(command: str, request: Request):
             "SELECT * FROM workouts ORDER BY start_time DESC LIMIT ?",
             (limit,)
         )
-        for r in rows:
-            if "workout_type" not in r and "effective_type" in r:
-                r["workout_type"] = r["effective_type"]
-            elif "effective_type" not in r:
-                r["effective_type"] = r.get("workout_type", "workout")
-            if "normalized_type" not in r:
-                r["normalized_type"] = r.get("workout_type", "workout")
-            if "type_source" not in r:
-                r["type_source"] = "numeric_mapped"
-            if "gps_available" in r:
-                r["gps_available"] = bool(r["gps_available"])
-        return rows
+        type_overrides = load_json_file("workout_type_overrides.json", {})
+        feels = load_json_file("workout_feels.json", {})
+        return [normalize_workout_dict(r, type_overrides, feels) for r in rows]
 
     elif command == "get_workout_page":
         limit = body.get("limit", 20)
@@ -1326,36 +1367,21 @@ async def handle_bridge_command(command: str, request: Request):
             "SELECT * FROM workouts ORDER BY start_time DESC LIMIT ? OFFSET ?",
             (limit, offset)
         )
-        for r in items:
-            if "workout_type" not in r and "effective_type" in r:
-                r["workout_type"] = r["effective_type"]
-            elif "effective_type" not in r:
-                r["effective_type"] = r.get("workout_type", "workout")
-            if "normalized_type" not in r:
-                r["normalized_type"] = r.get("workout_type", "workout")
-            if "type_source" not in r:
-                r["type_source"] = "numeric_mapped"
-            if "gps_available" in r:
-                r["gps_available"] = bool(r["gps_available"])
+        type_overrides = load_json_file("workout_type_overrides.json", {})
+        feels = load_json_file("workout_feels.json", {})
+        normalized_items = [normalize_workout_dict(r, type_overrides, feels) for r in items]
         total_row = query_one("SELECT COUNT(*) as count FROM workouts")
         total = total_row["count"] if total_row else len(items)
-        return {"items": items, "total": total}
+        return {"items": normalized_items, "total": total}
 
     elif command == "get_workout_detail":
         wid = body.get("workoutId", "")
         row = query_one("SELECT * FROM workouts WHERE workout_id = ?", (wid,))
-        if row:
-            if "workout_type" not in row and "effective_type" in row:
-                row["workout_type"] = row["effective_type"]
-            elif "effective_type" not in row:
-                row["effective_type"] = row.get("workout_type", "workout")
-            if "normalized_type" not in row:
-                row["normalized_type"] = row.get("workout_type", "workout")
-            if "type_source" not in row:
-                row["type_source"] = "numeric_mapped"
-            if "gps_available" in row:
-                row["gps_available"] = bool(row["gps_available"])
-        return row
+        if not row:
+            return None
+        type_overrides = load_json_file("workout_type_overrides.json", {})
+        feels = load_json_file("workout_feels.json", {})
+        return normalize_workout_dict(row, type_overrides, feels)
 
     elif command == "get_workout_series":
         wid = body.get("workoutId", "")
@@ -1392,18 +1418,62 @@ async def handle_bridge_command(command: str, request: Request):
             for pt in route_rows
         ]
 
+        split_rows = query_all(
+            "SELECT split_index, distance_m, duration_seconds, partial FROM workout_splits WHERE workout_id = ? ORDER BY split_index ASC",
+            (wid,)
+        )
+        splits = [
+            {
+                "split_index": int(s["split_index"]),
+                "distance_m": float(s["distance_m"]),
+                "duration_seconds": int(s["duration_seconds"]),
+                "partial": bool(s.get("partial", 0))
+            }
+            for s in split_rows
+        ] if split_rows else []
+
+        pause_rows = query_all(
+            "SELECT start_time, end_time, duration_seconds FROM workout_pauses WHERE workout_id = ? ORDER BY start_time ASC",
+            (wid,)
+        )
+        pauses = [
+            {
+                "start_time": p["start_time"],
+                "end_time": p["end_time"],
+                "duration_seconds": int(p.get("duration_seconds") or 0)
+            }
+            for p in pause_rows
+        ] if pause_rows else []
+
+        lap_rows = query_all(
+            "SELECT lap_index, start_time, end_time, distance_meters, calories, avg_hr, max_hr FROM workout_laps WHERE workout_id = ? ORDER BY lap_index ASC",
+            (wid,)
+        )
+        laps = [
+            {
+                "lap_index": int(l["lap_index"]),
+                "start_time": l["start_time"],
+                "end_time": l["end_time"],
+                "distance_meters": l.get("distance_meters"),
+                "calories": l.get("calories"),
+                "avg_hr": l.get("avg_hr"),
+                "max_hr": l.get("max_hr")
+            }
+            for l in lap_rows
+        ] if lap_rows else []
+
         return {
             "workout_id": wid,
             "samples": samples,
             "route": route,
-            "pauses": [],
-            "splits": [],
-            "laps": [],
+            "pauses": pauses,
+            "splits": splits,
+            "laps": laps,
             "summary": {
                 "average_pace": w.get("avg_pace") if w else None,
                 "average_cadence": w.get("avg_cadence_spm") if w else None,
-                "max_cadence": None,
-                "average_stride_cm": None,
+                "max_cadence": w.get("max_cadence_spm") if w else None,
+                "average_stride_cm": w.get("avg_stride_cm") if w else None,
                 "elevation_gain_m": w.get("elevation_gain_m") if w else None,
                 "elevation_loss_m": w.get("elevation_loss_m") if w else None,
                 "average_power_watts": None,
@@ -1419,7 +1489,8 @@ async def handle_bridge_command(command: str, request: Request):
     elif command == "get_workout_insight":
         wid = body.get("workoutId", "")
         w = query_one("SELECT * FROM workouts WHERE workout_id = ?", (wid,))
-        wtype = (w.get("effective_type") if w else None) or "running"
+        overrides = load_json_file("workout_type_overrides.json", {})
+        wtype = overrides.get(wid) or (w.get("workout_type_override") if w else None) or (w.get("workout_type") if w else None) or "running"
         return {
             "workout_id": wid,
             "workout_type": wtype,
@@ -1436,71 +1507,86 @@ async def handle_bridge_command(command: str, request: Request):
     elif command == "set_workout_type_override":
         wid = body.get("workoutId", "")
         override = body.get("userOverride")
-        conn = get_db_connection()
-        if conn:
+        
+        # 1. Persistir en archivo JSON garantizado
+        overrides = load_json_file("workout_type_overrides.json", {})
+        if not isinstance(overrides, dict):
+            overrides = {}
+        if override:
+            overrides[wid] = override
+        else:
+            overrides.pop(wid, None)
+        save_json_file("workout_type_overrides.json", overrides)
+
+        # 2. Persistir en SQLite si es posible
+        if wid:
             try:
-                conn.execute("UPDATE workouts SET user_override = ? WHERE workout_id = ?", (override, wid))
-                conn.commit()
+                execute_write("UPDATE workouts SET workout_type_override = ? WHERE workout_id = ?", (override, wid))
             except Exception:
-                pass
-            conn.close()
+                try:
+                    execute_write("UPDATE workouts SET user_override = ? WHERE workout_id = ?", (override, wid))
+                except Exception:
+                    pass
+
         row = query_one("SELECT * FROM workouts WHERE workout_id = ?", (wid,))
         if not row:
-            return {"workout_id": wid, "workout_type": "unknown", "normalized_type": "unknown", "type_source": "user", "effective_type": override or "unknown", "start_time": datetime.utcnow().isoformat() + "Z", "end_time": datetime.utcnow().isoformat() + "Z"}
-        return row
+            return {
+                "workout_id": wid,
+                "workout_type": "unknown",
+                "normalized_type": "unknown",
+                "type_source": "user",
+                "effective_type": override or "unknown",
+                "user_override": override,
+                "workout_type_override": override,
+                "start_time": datetime.utcnow().isoformat() + "Z",
+                "end_time": datetime.utcnow().isoformat() + "Z"
+            }
+        return normalize_workout_dict(row, overrides)
 
     elif command == "get_unknown_workout_codes":
-        conn = get_db_connection()
-        if not conn:
-            return []
-        try:
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS workout_code_labels (
-                    zepp_type INTEGER PRIMARY KEY,
-                    label TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                )
-            """)
-            conn.commit()
-        except Exception:
-            pass
+        # 1. Cargar etiquetas almacenadas en JSON
+        json_labels = load_json_file("workout_code_labels.json", {})
+        if not isinstance(json_labels, dict):
+            json_labels = {}
 
+        # 2. Consultar base de datos
+        db_labels = {}
         workout_counts = {}
         try:
-            rows = conn.execute(
-                "SELECT zepp_type, COUNT(*) as cnt FROM workouts WHERE zepp_type IS NOT NULL AND (workout_type LIKE 'unknown:%' OR workout_type = 'unknown') GROUP BY zepp_type"
-            ).fetchall()
-            for r in rows:
-                code = r[0] if isinstance(r, (tuple, list)) else r["zepp_type"]
-                cnt = r[1] if isinstance(r, (tuple, list)) else r["cnt"]
-                if code is not None:
-                    workout_counts[int(code)] = int(cnt)
-        except Exception:
-            pass
-
-        labels_map = {}
-        try:
-            lbl_rows = conn.execute("SELECT zepp_type, label, updated_at FROM workout_code_labels").fetchall()
+            lbl_rows = query_all("SELECT zepp_type, label, updated_at FROM workout_code_labels")
             for r in lbl_rows:
-                code = r[0] if isinstance(r, (tuple, list)) else r["zepp_type"]
-                lbl = r[1] if isinstance(r, (tuple, list)) else r["label"]
-                upd = r[2] if isinstance(r, (tuple, list)) else r["updated_at"]
+                code = r.get("zepp_type")
                 if code is not None:
-                    labels_map[int(code)] = {"label": str(lbl or ""), "updated_at": str(upd or "")}
+                    db_labels[int(code)] = {
+                        "label": str(r.get("label") or ""),
+                        "updated_at": str(r.get("updated_at") or "")
+                    }
         except Exception:
             pass
 
-        conn.close()
+        try:
+            cnt_rows = query_all(
+                "SELECT zepp_type, COUNT(*) as cnt FROM workouts WHERE zepp_type IS NOT NULL AND (workout_type LIKE 'unknown:%' OR workout_type = 'unknown') GROUP BY zepp_type"
+            )
+            for r in cnt_rows:
+                code = r.get("zepp_type")
+                if code is not None:
+                    workout_counts[int(code)] = int(r.get("cnt") or 0)
+        except Exception:
+            pass
 
-        all_codes = sorted(set(workout_counts.keys()).union(set(labels_map.keys())))
+        # Mezclar etiquetas JSON y DB
+        all_codes = sorted(set(workout_counts.keys()).union(set(db_labels.keys())).union(set(int(k) for k in json_labels.keys() if str(k).isdigit())))
         results = []
         for code in all_codes:
-            label_info = labels_map.get(code, {})
+            lbl_info = json_labels.get(str(code)) or db_labels.get(code) or {}
+            lbl_text = lbl_info.get("label") if isinstance(lbl_info, dict) else str(lbl_info)
+            lbl_time = lbl_info.get("updated_at", "") if isinstance(lbl_info, dict) else ""
             results.append({
                 "zeppType": code,
-                "label": label_info.get("label", ""),
+                "label": lbl_text or "",
                 "records": workout_counts.get(code, 0),
-                "updatedAt": label_info.get("updated_at", "")
+                "updatedAt": lbl_time or ""
             })
         return results
 
@@ -1508,10 +1594,20 @@ async def handle_bridge_command(command: str, request: Request):
         zepp_type = body.get("zeppType")
         label = body.get("label")
         now_iso = datetime.utcnow().isoformat() + "Z"
-        conn = get_db_connection()
-        if conn and zepp_type is not None:
+        if zepp_type is not None:
+            code_key = str(int(zepp_type))
+            labels = load_json_file("workout_code_labels.json", {})
+            if not isinstance(labels, dict):
+                labels = {}
+            if label and str(label).strip():
+                labels[code_key] = {"label": str(label).strip(), "updated_at": now_iso}
+            else:
+                labels.pop(code_key, None)
+            save_json_file("workout_code_labels.json", labels)
+
+            # Persistir en SQLite
             try:
-                conn.execute("""
+                execute_write("""
                     CREATE TABLE IF NOT EXISTS workout_code_labels (
                         zepp_type INTEGER PRIMARY KEY,
                         label TEXT NOT NULL,
@@ -1519,17 +1615,16 @@ async def handle_bridge_command(command: str, request: Request):
                     )
                 """)
                 if label and str(label).strip():
-                    conn.execute(
+                    execute_write(
                         "INSERT OR REPLACE INTO workout_code_labels (zepp_type, label, updated_at) VALUES (?, ?, ?)",
                         (int(zepp_type), str(label).strip(), now_iso)
                     )
                 else:
-                    conn.execute("DELETE FROM workout_code_labels WHERE zepp_type = ?", (int(zepp_type),))
-                conn.commit()
+                    execute_write("DELETE FROM workout_code_labels WHERE zepp_type = ?", (int(zepp_type),))
             except Exception:
                 pass
-            conn.close()
-        return handle_ipc_command("get_unknown_workout_codes", {})
+
+        return await handle_bridge_command("get_unknown_workout_codes", request)
 
     elif command == "get_workout_type_options":
         return [
@@ -1623,14 +1718,14 @@ async def handle_bridge_command(command: str, request: Request):
                 rec_row = query_one(
                     "SELECT AVG(COALESCE(CASE WHEN training_load IS NOT NULL AND training_load > 0 THEN training_load ELSE NULL END, "
                     "                    CASE WHEN calories IS NOT NULL AND calories > 0 THEN calories / 10.0 ELSE NULL END, "
-                    "                    (duration_seconds / 60.0) * (COALESCE(avg_hr, 120) / 120.0))) as val, COUNT(*) as cnt "
+                    "                    (COALESCE(moving_seconds, CAST((julianday(end_time) - julianday(start_time)) * 86400 AS INTEGER), 1800) / 60.0) * (COALESCE(avg_hr, 120) / 120.0))) as val, COUNT(*) as cnt "
                     "FROM workouts WHERE substr(start_time, 1, 10) >= ?",
                     (recent_start.strftime("%Y-%m-%d"),)
                 )
                 base_row = query_one(
                     "SELECT AVG(COALESCE(CASE WHEN training_load IS NOT NULL AND training_load > 0 THEN training_load ELSE NULL END, "
                     "                    CASE WHEN calories IS NOT NULL AND calories > 0 THEN calories / 10.0 ELSE NULL END, "
-                    "                    (duration_seconds / 60.0) * (COALESCE(avg_hr, 120) / 120.0))) as val, COUNT(*) as cnt "
+                    "                    (COALESCE(moving_seconds, CAST((julianday(end_time) - julianday(start_time)) * 86400 AS INTEGER), 1800) / 60.0) * (COALESCE(avg_hr, 120) / 120.0))) as val, COUNT(*) as cnt "
                     "FROM workouts WHERE substr(start_time, 1, 10) BETWEEN ? AND ?",
                     (baseline_start.strftime("%Y-%m-%d"), baseline_end.strftime("%Y-%m-%d"))
                 )
@@ -2125,25 +2220,56 @@ async def handle_bridge_command(command: str, request: Request):
                 else:
                     above_sec += cnt
 
-        # 2. Si no hay workout_samples, consultar distribución desde workouts por duración y FC
+        # 1.5 Consultar si existen zonas de FC oficiales registradas en workout_hr_zones
+        if (z1_sec + z2_sec + z3_sec + z4_sec + z5_sec) == 0:
+            try:
+                zh_rows = query_all(
+                    "SELECT zh.zone_index, SUM(zh.seconds) as sec "
+                    "FROM workout_hr_zones zh "
+                    "JOIN workouts w ON zh.workout_id = w.workout_id "
+                    "WHERE substr(w.start_time, 1, 10) >= ? "
+                    "GROUP BY zh.zone_index",
+                    (start_date_str,)
+                )
+                if zh_rows:
+                    source = "workout_hr_zones"
+                    for r in zh_rows:
+                        z_idx = int(r["zone_index"])
+                        sec = int(r["sec"] or 0)
+                        if z_idx == 0:
+                            z1_sec += sec
+                        elif z_idx == 1:
+                            z2_sec += sec
+                        elif z_idx == 2:
+                            z3_sec += sec
+                        elif z_idx == 3:
+                            z4_sec += sec
+                        elif z_idx >= 4:
+                            z5_sec += sec
+            except Exception:
+                pass
+
+        # 2. Si no hay workout_samples ni workout_hr_zones, consultar distribución desde workouts por duración y FC
         if (z1_sec + z2_sec + z3_sec + z4_sec + z5_sec) == 0:
             w_rows = query_all(
-                "SELECT duration_seconds, avg_hr, max_hr, min_hr FROM workouts "
-                "WHERE substr(start_time, 1, 10) >= ? AND duration_seconds > 0",
+                "SELECT COALESCE(moving_seconds, CAST((julianday(end_time) - julianday(start_time)) * 86400 AS INTEGER), 0) as dur, "
+                "avg_hr, max_hr, min_hr FROM workouts "
+                "WHERE substr(start_time, 1, 10) >= ? AND (moving_seconds > 0 OR (end_time IS NOT NULL AND start_time IS NOT NULL))",
                 (start_date_str,)
             )
             if not w_rows:
                 fallback_start = (datetime.now().date() - timedelta(days=180)).strftime("%Y-%m-%d")
                 w_rows = query_all(
-                    "SELECT duration_seconds, avg_hr, max_hr, min_hr FROM workouts "
-                    "WHERE substr(start_time, 1, 10) >= ? AND duration_seconds > 0",
+                    "SELECT COALESCE(moving_seconds, CAST((julianday(end_time) - julianday(start_time)) * 86400 AS INTEGER), 0) as dur, "
+                    "avg_hr, max_hr, min_hr FROM workouts "
+                    "WHERE substr(start_time, 1, 10) >= ? AND (moving_seconds > 0 OR (end_time IS NOT NULL AND start_time IS NOT NULL))",
                     (fallback_start,)
                 )
 
             if w_rows:
                 source = "workouts"
                 for w in w_rows:
-                    dur = int(w.get("duration_seconds") or 0)
+                    dur = int(w.get("dur") or 0)
                     avg = w.get("avg_hr")
                     if not avg or avg <= 0:
                         z2_sec += int(dur * 0.5)
@@ -2844,9 +2970,167 @@ async def handle_bridge_command(command: str, request: Request):
     # 14. Novedades v3.0.5+: Rings, Logbook (PB, Zapatillas, Carreras), Coach & Cartas
     # --------------------------------------------------------------------------
     elif command == "annual_rings":
-        today_str = datetime.now().strftime("%Y-%m-%d")
+        today_date = datetime.now().date()
+        today_str = today_date.strftime("%Y-%m-%d")
+
+        # Consultar todos los entrenamientos
+        w_rows = query_all(
+            "SELECT workout_id, substr(start_time, 1, 10) as dt, "
+            "COALESCE(workout_type_override, workout_type, 'workout') as kind, "
+            "COALESCE(distance_meters, 0.0) as dist_m, "
+            "COALESCE(moving_seconds, CAST((julianday(end_time) - julianday(start_time)) * 86400 AS INTEGER), 0) as dur_s "
+            "FROM workouts WHERE start_time IS NOT NULL ORDER BY start_time ASC"
+        )
+        # Consultar días con pasos
+        step_rows = query_all(
+            "SELECT date, MAX(value) as val FROM daily_metrics WHERE metric = 'steps' AND value > 0 GROUP BY date"
+        )
+        steps_by_date = {r["date"]: int(r["val"]) for r in step_rows if r.get("date") and r.get("val")}
+
+        # Consultar sueño
+        sleep_rows = query_all(
+            "SELECT substr(end_time, 1, 10) as dt, MAX(duration_minutes) as dur "
+            "FROM sleep_sessions WHERE duration_minutes > 0 GROUP BY dt"
+        )
+        sleep_by_date = {r["dt"]: int(r["dur"]) for r in sleep_rows if r.get("dt") and r.get("dur")}
+
+        # Agrupar entrenamientos por año
+        workouts_by_year = {}
+        first_year = today_date.year
+        for w in w_rows:
+            dt = w.get("dt")
+            if not dt or len(dt) < 4:
+                continue
+            try:
+                yr = int(dt[:4])
+                first_year = min(first_year, yr)
+                workouts_by_year.setdefault(yr, []).append(w)
+            except Exception:
+                pass
+
+        years_data = []
+        for yr in range(first_year, today_date.year + 1):
+            yr_str = str(yr)
+            yr_workouts = workouts_by_year.get(yr, [])
+
+            data_days_set = set()
+            active_days_set = set()
+            for w in yr_workouts:
+                dt = w.get("dt")
+                if dt:
+                    data_days_set.add(dt)
+                    active_days_set.add(dt)
+            for d in steps_by_date:
+                if d.startswith(yr_str):
+                    data_days_set.add(d)
+            for d in sleep_by_date:
+                if d.startswith(yr_str):
+                    data_days_set.add(d)
+
+            total_duration_s = sum(int(w.get("dur_s") or 0) for w in yr_workouts)
+            total_distance_m = sum(float(w.get("dist_m") or 0.0) for w in yr_workouts)
+
+            runs = [w for w in yr_workouts if any(k in (w.get("kind") or "").lower() for k in ("run", "carrera", "treadmill"))]
+            run_distance_m = sum(float(w.get("dist_m") or 0.0) for w in runs)
+
+            # Semanas (53 slots de minutos por semana)
+            weeks = [0.0] * 53
+            month_counts = [0] * 12
+            for w in yr_workouts:
+                dt = w.get("dt")
+                if dt:
+                    try:
+                        w_date = datetime.strptime(dt, "%Y-%m-%d").date()
+                        slot = min(52, w_date.timetuple().tm_yday // 7)
+                        weeks[slot] += (int(w.get("dur_s") or 0) / 60.0)
+                        month_counts[w_date.month - 1] += 1
+                    except Exception:
+                        pass
+
+            busiest_m = None
+            busiest_cnt = 0
+            for idx, c in enumerate(month_counts):
+                if c > busiest_cnt:
+                    busiest_cnt = c
+                    busiest_m = idx + 1
+
+            # Longest run / workout
+            longest_run = None
+            max_run_dist = 0.0
+            for r in runs:
+                d = float(r.get("dist_m") or 0.0)
+                if d > max_run_dist:
+                    max_run_dist = d
+                    longest_run = {
+                        "workout_id": r.get("workout_id"),
+                        "date": r.get("dt"),
+                        "kind": r.get("kind"),
+                        "distance_m": d,
+                        "duration_s": r.get("dur_s")
+                    }
+
+            longest_workout = None
+            max_w_dur = 0
+            for w in yr_workouts:
+                s = int(w.get("dur_s") or 0)
+                if s > max_w_dur:
+                    max_w_dur = s
+                    longest_workout = {
+                        "workout_id": w.get("workout_id"),
+                        "date": w.get("dt"),
+                        "kind": w.get("kind"),
+                        "distance_m": float(w.get("dist_m") or 0.0),
+                        "duration_s": s
+                    }
+
+            # Pasos de este año
+            yr_steps = [v for k, v in steps_by_date.items() if k.startswith(yr_str)]
+            steps_total = sum(yr_steps) if yr_steps else None
+
+            # Sueño de este año
+            yr_sleep = [v for k, v in sleep_by_date.items() if k.startswith(yr_str)]
+            sleep_avg = round(sum(yr_sleep) / len(yr_sleep), 1) if yr_sleep else None
+
+            stars = [
+                {
+                    "workout_id": str(w.get("workout_id") or ""),
+                    "date": w.get("dt"),
+                    "kind": w.get("kind"),
+                    "is_run": any(k in (w.get("kind") or "").lower() for k in ("run", "carrera")),
+                    "distance_m": float(w.get("dist_m") or 0.0) if w.get("dist_m") else None,
+                    "duration_s": int(w.get("dur_s") or 0) if w.get("dur_s") else None
+                }
+                for w in yr_workouts
+            ]
+
+            weeks_clean = [round(m, 1) if m > 0 else (0.0 if len(data_days_set) > 0 else None) for m in weeks]
+
+            years_data.append({
+                "year": yr,
+                "in_progress": (yr == today_date.year),
+                "data_days": len(data_days_set),
+                "workouts": len(yr_workouts),
+                "active_days": len(active_days_set),
+                "duration_s": total_duration_s,
+                "distance_m": round(total_distance_m, 1),
+                "runs": len(runs),
+                "run_distance_m": round(run_distance_m, 1),
+                "weeks": weeks_clean,
+                "busiest_month": busiest_m,
+                "busiest_month_workouts": busiest_cnt,
+                "longest_run": longest_run,
+                "longest_workout": longest_workout,
+                "steps_total": steps_total,
+                "steps_days": len(yr_steps),
+                "sleep_avg_minutes": sleep_avg,
+                "sleep_nights": len(yr_sleep),
+                "personal_records": [],
+                "races": [],
+                "stars": stars
+            })
+
         return {
-            "years": [],
+            "years": years_data,
             "today": today_str
         }
 
@@ -2854,22 +3138,380 @@ async def handle_bridge_command(command: str, request: Request):
         return "/data/exports/rings.png"
 
     elif command == "personal_records":
+        TARGETS = [
+            ("5k", 5000.0),
+            ("10k", 10000.0),
+            ("half", 21097.5),
+            ("marathon", 42195.0),
+        ]
+        w_rows = query_all(
+            "SELECT workout_id, substr(start_time, 1, 10) as dt, "
+            "COALESCE(distance_meters, 0.0) as dist_m, "
+            "COALESCE(moving_seconds, CAST((julianday(end_time) - julianday(start_time)) * 86400 AS INTEGER), 0) as dur_s "
+            "FROM workouts "
+            "WHERE (workout_type LIKE '%run%' OR workout_type LIKE '%carrera%' OR workout_type_override LIKE '%run%') "
+            "  AND distance_meters >= 4900 "
+            "ORDER BY start_time ASC"
+        )
+        efforts = {k: [] for k, _ in TARGETS}
+        for w in w_rows:
+            wid = str(w.get("workout_id") or "")
+            dist = float(w.get("dist_m") or 0.0)
+            dur = int(w.get("dur_s") or 0)
+            dt = str(w.get("dt") or "")
+            if dur <= 0 or dist <= 0:
+                continue
+
+            splits = query_all(
+                "SELECT split_index, distance_m, duration_seconds, partial FROM workout_splits WHERE workout_id = ? ORDER BY split_index ASC",
+                (wid,)
+            )
+            for key, target in TARGETS:
+                if dist < target * 0.98:
+                    continue
+                found_sec = None
+                method = "whole"
+
+                if splits and target <= 10000.0:
+                    km_count = int(round(target / 1000.0))
+                    km_times = [int(s.get("duration_seconds") or 0) for s in splits if not s.get("partial") and abs(float(s.get("distance_m") or 0.0) - 1000.0) < 100]
+                    if len(km_times) >= km_count:
+                        min_split_sum = min(sum(km_times[i:i+km_count]) for i in range(len(km_times) - km_count + 1))
+                        if min_split_sum > 0:
+                            found_sec = min_split_sum
+                            method = "splits"
+
+                if found_sec is None and dist >= target and dist <= target * 1.05:
+                    found_sec = dur
+                    method = "whole"
+
+                if found_sec and (found_sec / (target / 1000.0)) >= 150.0:
+                    efforts[key].append({
+                        "seconds": found_sec,
+                        "method": method,
+                        "workout_id": wid,
+                        "race_id": None,
+                        "race_name": None,
+                        "date": dt
+                    })
+
+        # Incluir carreras de races.json
+        races = load_json_file("races.json", [])
+        if isinstance(races, list):
+            for race in races:
+                r_dist = float(race.get("distance_m") or 0.0)
+                r_sec = int(race.get("result_seconds") or 0)
+                if r_dist <= 0 or r_sec <= 0:
+                    continue
+                for key, target in TARGETS:
+                    if abs(r_dist - target) <= target * 0.02 and (r_sec / (target / 1000.0)) >= 150.0:
+                        efforts[key].append({
+                            "seconds": r_sec,
+                            "method": "race",
+                            "workout_id": race.get("workout_id"),
+                            "race_id": race.get("id"),
+                            "race_name": race.get("name"),
+                            "date": race.get("race_date")
+                        })
+
+        records = []
+        for key, distance_m in TARGETS:
+            list_eff = efforts.get(key, [])
+            list_eff.sort(key=lambda x: (x["seconds"], x["date"]))
+            best = list_eff[0] if list_eff else None
+            runners_up = list_eff[1:3] if len(list_eff) > 1 else []
+            records.append({
+                "key": key,
+                "distance_m": distance_m,
+                "best": best,
+                "runners_up": runners_up
+            })
+
         return {
-            "records": [],
-            "runs_scanned": 0
+            "records": records,
+            "runs_scanned": len(w_rows)
         }
 
     elif command == "shoes_overview":
+        shoes = load_json_file("shoes.json", [])
+        if not isinstance(shoes, list):
+            shoes = []
+
+        w_rows = query_all(
+            "SELECT workout_id, workout_type_override, workout_type, "
+            "COALESCE(distance_meters, 0.0) / 1000.0 as km, substr(start_time, 1, 10) as dt "
+            "FROM workouts ORDER BY start_time ASC"
+        )
+        feels = load_json_file("workout_feels.json", {})
+
+        shoe_stats = {s.get("id"): {"km": float(s.get("start_km") or 0.0), "workouts": 0, "last_used": None} for s in shoes}
+        default_by_sport = {}
+        for s in shoes:
+            if s.get("is_default") and not s.get("retired_on"):
+                default_by_sport[s.get("sport", "running")] = s.get("id")
+
+        for w in w_rows:
+            wid = str(w.get("workout_id") or "")
+            w_km = float(w.get("km") or 0.0)
+            w_dt = w.get("dt")
+            w_sport = (w.get("workout_type_override") or w.get("workout_type") or "running").lower()
+
+            feel = feels.get(wid, {}) if isinstance(feels, dict) else {}
+            chosen_shoe_id = feel.get("shoe_id")
+            shoe_mode = feel.get("shoe_mode", "auto")
+
+            assigned_id = None
+            if shoe_mode == "chosen" and chosen_shoe_id in shoe_stats:
+                assigned_id = chosen_shoe_id
+            elif shoe_mode == "auto":
+                sport_key = "running" if "run" in w_sport else ("trail" if "trail" in w_sport else ("walking" if "walk" in w_sport else None))
+                if sport_key and sport_key in default_by_sport:
+                    assigned_id = default_by_sport[sport_key]
+                elif default_by_sport:
+                    assigned_id = next(iter(default_by_sport.values()))
+
+            if assigned_id and assigned_id in shoe_stats:
+                shoe_stats[assigned_id]["km"] += w_km
+                shoe_stats[assigned_id]["workouts"] += 1
+                shoe_stats[assigned_id]["last_used"] = w_dt
+
+        result_shoes = []
+        for s in shoes:
+            sid = s.get("id")
+            stat = shoe_stats.get(sid, {"km": float(s.get("start_km") or 0.0), "workouts": 0, "last_used": None})
+            item = dict(s)
+            item["km"] = round(stat["km"], 1)
+            item["workouts"] = stat["workouts"]
+            item["last_used"] = stat["last_used"]
+            result_shoes.append(item)
+
         return {
-            "shoes": [],
+            "shoes": result_shoes,
             "unknown_gear": []
         }
 
-    elif command in ("shoe_save", "shoe_delete", "race_save", "race_delete", "injury_save", "injury_delete", "save_life_event", "delete_life_event"):
+    elif command == "shoe_save":
+        input_data = body.get("input") if isinstance(body.get("input"), dict) else body
+        shoes = load_json_file("shoes.json", [])
+        if not isinstance(shoes, list):
+            shoes = []
+
+        sid = input_data.get("id")
+        now_iso = datetime.utcnow().isoformat() + "Z"
+
+        if input_data.get("is_default"):
+            sport = input_data.get("sport", "running")
+            for s in shoes:
+                if s.get("sport") == sport:
+                    s["is_default"] = False
+
+        if sid:
+            found = False
+            for idx, s in enumerate(shoes):
+                if s.get("id") == sid:
+                    shoes[idx] = {
+                        **s,
+                        **input_data,
+                        "updated_at": now_iso
+                    }
+                    found = True
+                    break
+            if not found:
+                sid = int(datetime.now().timestamp() * 1000)
+                input_data["id"] = sid
+                input_data["created_at"] = now_iso
+                input_data["updated_at"] = now_iso
+                shoes.append(input_data)
+        else:
+            sid = int(datetime.now().timestamp() * 1000)
+            input_data["id"] = sid
+            input_data["created_at"] = now_iso
+            input_data["updated_at"] = now_iso
+            shoes.append(input_data)
+
+        save_json_file("shoes.json", shoes)
+        return sid
+
+    elif command == "shoe_delete":
+        sid = body.get("id")
+        shoes = load_json_file("shoes.json", [])
+        if isinstance(shoes, list) and sid is not None:
+            shoes = [s for s in shoes if s.get("id") != sid]
+            save_json_file("shoes.json", shoes)
         return True
 
-    elif command in ("races_list", "injuries_list", "list_life_events"):
-        return []
+    elif command == "races_list":
+        races = load_json_file("races.json", [])
+        if not isinstance(races, list):
+            races = []
+        races.sort(key=lambda r: str(r.get("race_date") or ""))
+        return races
+
+    elif command == "race_save":
+        input_data = body.get("input") if isinstance(body.get("input"), dict) else body
+        races = load_json_file("races.json", [])
+        if not isinstance(races, list):
+            races = []
+
+        rid = input_data.get("id")
+        now_iso = datetime.utcnow().isoformat() + "Z"
+        if rid:
+            found = False
+            for idx, r in enumerate(races):
+                if r.get("id") == rid:
+                    races[idx] = {**r, **input_data, "updated_at": now_iso}
+                    found = True
+                    break
+            if not found:
+                rid = int(datetime.now().timestamp() * 1000)
+                input_data["id"] = rid
+                input_data["created_at"] = now_iso
+                input_data["updated_at"] = now_iso
+                races.append(input_data)
+        else:
+            rid = int(datetime.now().timestamp() * 1000)
+            input_data["id"] = rid
+            input_data["created_at"] = now_iso
+            input_data["updated_at"] = now_iso
+            races.append(input_data)
+
+        save_json_file("races.json", races)
+        return rid
+
+    elif command == "race_delete":
+        rid = body.get("id")
+        races = load_json_file("races.json", [])
+        if isinstance(races, list) and rid is not None:
+            races = [r for r in races if r.get("id") != rid]
+            save_json_file("races.json", races)
+        return True
+
+    elif command == "injuries_list":
+        injuries = load_json_file("injuries.json", [])
+        if not isinstance(injuries, list):
+            injuries = []
+        injuries.sort(key=lambda x: (x.get("end_date") is not None, str(x.get("start_date") or "")), reverse=False)
+        return injuries
+
+    elif command == "injury_save":
+        input_data = body.get("input") if isinstance(body.get("input"), dict) else body
+        injuries = load_json_file("injuries.json", [])
+        if not isinstance(injuries, list):
+            injuries = []
+
+        iid = input_data.get("id")
+        now_iso = datetime.utcnow().isoformat() + "Z"
+        if iid:
+            found = False
+            for idx, i in enumerate(injuries):
+                if i.get("id") == iid:
+                    injuries[idx] = {**i, **input_data, "updated_at": now_iso}
+                    found = True
+                    break
+            if not found:
+                iid = int(datetime.now().timestamp() * 1000)
+                input_data["id"] = iid
+                input_data["created_at"] = now_iso
+                input_data["updated_at"] = now_iso
+                injuries.append(input_data)
+        else:
+            iid = int(datetime.now().timestamp() * 1000)
+            input_data["id"] = iid
+            input_data["created_at"] = now_iso
+            input_data["updated_at"] = now_iso
+            injuries.append(input_data)
+
+        save_json_file("injuries.json", injuries)
+        return iid
+
+    elif command == "injury_delete":
+        iid = body.get("id")
+        injuries = load_json_file("injuries.json", [])
+        if isinstance(injuries, list) and iid is not None:
+            injuries = [i for i in injuries if i.get("id") != iid]
+            save_json_file("injuries.json", injuries)
+        return True
+
+    elif command == "coach_notes_list":
+        notes = load_json_file("coach_notes.json", [])
+        if not isinstance(notes, list):
+            notes = []
+        accepted = [n for n in notes if n.get("state") == "accepted"]
+        proposed = [n for n in notes if n.get("state") == "proposed"]
+        accepted.sort(key=lambda n: n.get("id", 0))
+        proposed.sort(key=lambda n: n.get("id", 0), reverse=True)
+        return {
+            "accepted": accepted,
+            "proposed": proposed
+        }
+
+    elif command == "coach_note_add":
+        text = str(body.get("text") or "").strip()
+        if not text:
+            raise HTTPException(status_code=400, detail="El contenido de la nota no puede estar vacío")
+        notes = load_json_file("coach_notes.json", [])
+        if not isinstance(notes, list):
+            notes = []
+        nid = int(datetime.now().timestamp() * 1000)
+        now_iso = datetime.utcnow().isoformat() + "Z"
+        notes.append({
+            "id": nid,
+            "text": text,
+            "state": "accepted",
+            "source": "user",
+            "created_at": now_iso,
+            "updated_at": now_iso,
+            "decided_at": now_iso
+        })
+        save_json_file("coach_notes.json", notes)
+        return nid
+
+    elif command == "coach_note_decide":
+        nid = body.get("id")
+        accept = bool(body.get("accept"))
+        notes = load_json_file("coach_notes.json", [])
+        now_iso = datetime.utcnow().isoformat() + "Z"
+        if isinstance(notes, list):
+            for n in notes:
+                if n.get("id") == nid:
+                    n["state"] = "accepted" if accept else "rejected"
+                    n["decided_at"] = now_iso
+                    n["updated_at"] = now_iso
+                    break
+            save_json_file("coach_notes.json", notes)
+        return True
+
+    elif command == "coach_note_edit":
+        nid = body.get("id")
+        text = str(body.get("text") or "").strip()
+        notes = load_json_file("coach_notes.json", [])
+        now_iso = datetime.utcnow().isoformat() + "Z"
+        if isinstance(notes, list):
+            for n in notes:
+                if n.get("id") == nid:
+                    n["text"] = text
+                    n["updated_at"] = now_iso
+                    break
+            save_json_file("coach_notes.json", notes)
+        return True
+
+    elif command == "coach_note_delete":
+        nid = body.get("id")
+        notes = load_json_file("coach_notes.json", [])
+        if isinstance(notes, list) and nid is not None:
+            notes = [n for n in notes if n.get("id") != nid]
+            save_json_file("coach_notes.json", notes)
+        return True
+
+    elif command == "coach_notes_export":
+        md = body.get("markdown", "")
+        stem = body.get("file_stem", "coach-notes")
+        export_dir = DATA_DIR / "exports"
+        export_dir.mkdir(parents=True, exist_ok=True)
+        export_path = export_dir / f"{stem}.md"
+        with open(export_path, "w", encoding="utf-8") as f:
+            f.write(md)
+        return str(export_path)
 
     elif command == "workout_feel_get":
         wid = body.get("workoutId") or body.get("workout_id") or ""
@@ -2901,18 +3543,26 @@ async def handle_bridge_command(command: str, request: Request):
         input_data = body.get("input") if isinstance(body.get("input"), dict) else body
         wid = input_data.get("workout_id") or input_data.get("workoutId") or ""
         if wid:
+            rpe = input_data.get("rpe")
             feels = load_json_file("workout_feels.json", {})
             if not isinstance(feels, dict):
                 feels = {}
             feels[wid] = {
                 "workout_id": wid,
-                "rpe": input_data.get("rpe"),
+                "rpe": rpe,
                 "soreness": input_data.get("soreness", []),
                 "shoe_mode": input_data.get("shoe_mode", "auto"),
                 "shoe_id": input_data.get("shoe_id"),
                 "updated_at": datetime.utcnow().isoformat() + "Z"
             }
             save_json_file("workout_feels.json", feels)
+
+            # Persistir también en SQLite workouts.rpe
+            if rpe is not None:
+                try:
+                    execute_write("UPDATE workouts SET rpe = ? WHERE workout_id = ?", (int(rpe), wid))
+                except Exception:
+                    pass
         return True
 
     elif command in ("workout_feedback_save", "workout_feedback_dismiss", "workout_feedback_snooze", "workout_feedback_adjusted"):
@@ -2923,12 +3573,6 @@ async def handle_bridge_command(command: str, request: Request):
 
     elif command == "workout_feedback_prompt":
         return ""
-
-    elif command in ("coach_notes_list", "coach_notes_export"):
-        return []
-
-    elif command in ("coach_note_add", "coach_note_decide", "coach_note_edit", "coach_note_delete"):
-        return True
 
     elif command in ("letters_state", "letters_sync"):
         return {
@@ -3007,14 +3651,20 @@ async def handle_bridge_command(command: str, request: Request):
     elif command == "list_life_events":
         start = body.get("start")
         end = body.get("end")
-        events = query_all(
-            "SELECT id, title, category, start_date, end_date, notes, created_at, updated_at "
-            "FROM life_events WHERE (? IS NULL OR end_date IS NULL OR end_date >= ?) "
-            "AND (? IS NULL OR start_date <= ?) ORDER BY start_date DESC, id DESC",
-            (start, start, end, end)
-        )
-        if not events:
-            events = load_json_file("life_events.json", [])
+        events = load_json_file("life_events.json", [])
+        if not isinstance(events, list):
+            events = []
+        try:
+            db_events = query_all(
+                "SELECT id, title, category, start_date, end_date, notes, created_at, updated_at "
+                "FROM life_events WHERE (? IS NULL OR end_date IS NULL OR end_date >= ?) "
+                "AND (? IS NULL OR start_date <= ?) ORDER BY start_date DESC, id DESC",
+                (start, start, end, end)
+            )
+            if db_events:
+                events = db_events
+        except Exception:
+            pass
         return events
 
     elif command == "save_life_event":
@@ -3026,37 +3676,83 @@ async def handle_bridge_command(command: str, request: Request):
         e_date = inp.get("end_date") or inp.get("endDate")
         notes = inp.get("notes", "")
         now_iso = datetime.utcnow().isoformat() + "Z"
-        conn = get_db_connection()
-        res_id = eid or int(datetime.now().timestamp())
-        if conn:
-            try:
-                if eid:
-                    conn.execute(
-                        "UPDATE life_events SET title=?, category=?, start_date=?, end_date=?, notes=?, updated_at=? WHERE id=?",
-                        (title, cat, s_date, e_date, notes, now_iso, eid)
-                    )
-                else:
-                    cur = conn.execute(
-                        "INSERT INTO life_events (title, category, start_date, end_date, notes, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                        (title, cat, s_date, e_date, notes, now_iso, now_iso)
-                    )
-                    res_id = cur.lastrowid
-                conn.commit()
-            except Exception:
-                pass
-            conn.close()
-        return res_id
+
+        events = load_json_file("life_events.json", [])
+        if not isinstance(events, list):
+            events = []
+
+        if eid:
+            found = False
+            for idx, ev in enumerate(events):
+                if ev.get("id") == eid:
+                    events[idx] = {
+                        "id": eid,
+                        "title": title,
+                        "category": cat,
+                        "start_date": s_date,
+                        "end_date": e_date,
+                        "notes": notes,
+                        "created_at": ev.get("created_at", now_iso),
+                        "updated_at": now_iso
+                    }
+                    found = True
+                    break
+            if not found:
+                events.append({
+                    "id": eid,
+                    "title": title,
+                    "category": cat,
+                    "start_date": s_date,
+                    "end_date": e_date,
+                    "notes": notes,
+                    "created_at": now_iso,
+                    "updated_at": now_iso
+                })
+        else:
+            eid = int(datetime.now().timestamp() * 1000)
+            events.append({
+                "id": eid,
+                "title": title,
+                "category": cat,
+                "start_date": s_date,
+                "end_date": e_date,
+                "notes": notes,
+                "created_at": now_iso,
+                "updated_at": now_iso
+            })
+        save_json_file("life_events.json", events)
+
+        try:
+            execute_write("""
+                CREATE TABLE IF NOT EXISTS life_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    title TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    start_date TEXT NOT NULL,
+                    end_date TEXT,
+                    notes TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+            """)
+            execute_write(
+                "INSERT OR REPLACE INTO life_events (id, title, category, start_date, end_date, notes, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (eid, title, cat, s_date, e_date, notes, now_iso, now_iso)
+            )
+        except Exception:
+            pass
+        return eid
 
     elif command == "delete_life_event":
         eid = body.get("id")
-        conn = get_db_connection()
-        if conn and eid:
-            try:
-                conn.execute("DELETE FROM life_events WHERE id = ?", (eid,))
-                conn.commit()
-            except Exception:
-                pass
-            conn.close()
+        events = load_json_file("life_events.json", [])
+        if isinstance(events, list) and eid is not None:
+            events = [e for e in events if e.get("id") != eid]
+            save_json_file("life_events.json", events)
+        try:
+            execute_write("DELETE FROM life_events WHERE id = ?", (eid,))
+        except Exception:
+            pass
         return None
 
     elif command in ("submit_diagnostic_report", "submit_device_model_assignment"):

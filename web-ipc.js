@@ -18,6 +18,14 @@
     }
   } catch (e) {}
 
+  // Asegurar idioma español por defecto en toda la app si no se ha configurado
+  try {
+    const currentLocale = localStorage.getItem('zeppbridge-locale');
+    if (!currentLocale) {
+      localStorage.setItem('zeppbridge-locale', 'es');
+    }
+  } catch (e) {}
+
   // --------------------------------------------------------------------------
   // Polyfill universal de Portapapeles (navigator.clipboard) para HTTP / Red Local
   // En conexiones HTTP (como http://192.168.x.x:27480), los navegadores desactivan

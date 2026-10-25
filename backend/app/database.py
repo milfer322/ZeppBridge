@@ -34,6 +34,34 @@ def get_db_connection() -> Optional[sqlite3.Connection]:
         print(f"[DB] Error al conectar a {DB_PATH}: {e}")
         return None
 
+def get_db_write_connection() -> Optional[sqlite3.Connection]:
+    """Retorna una conexión de lectura-escritura a la base de datos local SQLite."""
+    if not DB_PATH.exists():
+        return None
+    try:
+        conn = sqlite3.connect(DB_PATH.as_posix(), timeout=10.0)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA busy_timeout = 10000;")
+        return conn
+    except Exception as e:
+        print(f"[DB] Error al conectar rw a {DB_PATH}: {e}")
+        return None
+
+def execute_write(query: str, params: tuple = ()) -> Optional[int]:
+    conn = get_db_write_connection()
+    if not conn:
+        return None
+    try:
+        cursor = conn.cursor()
+        cursor.execute(query, params)
+        conn.commit()
+        return cursor.lastrowid
+    except Exception as e:
+        print(f"[DB] Error ejecutando write: {query} -> {e}")
+        return None
+    finally:
+        conn.close()
+
 def query_all(query: str, params: tuple = ()) -> List[Dict[str, Any]]:
     conn = get_db_connection()
     if not conn:

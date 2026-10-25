@@ -1453,11 +1453,33 @@ if (fs.existsSync(weeklyReportI18nPath)) {
     "'weekly.training_load': 'Carga de entrenamiento',\n      'weekly.steps': 'Pasos',"
   );
   wrCode = wrCode.replace(
+    "({ score: '分', load: '', bpm: '次/分' }",
+    "({ score: '分', load: '', bpm: '次/分', pasos: '步', steps: '步', 步: '步' }"
+  );
+  wrCode = wrCode.replace(
+    "unitWord: (unit: string) => unit,",
+    "unitWord: (unit: string) => (unit === '步' || unit === 'pasos' ? 'steps' : unit),"
+  );
+  wrCode = wrCode.replace(
     "({ score: 'pts', load: '', bpm: 'lpm' }",
-    "({ score: 'pts', load: '', bpm: 'lpm', pasos: 'pasos', 步: 'pasos' }"
+    "({ score: 'pts', load: '', bpm: 'lpm', pasos: 'pasos', steps: 'pasos', 步: 'pasos' }"
   );
   fs.writeFileSync(weeklyReportI18nPath, wrCode, 'utf8');
   console.log('[Patch] Traducción de weekly.steps agregada en WeeklyReportCard.i18n.ts');
+}
+
+// 16. Enlazar 'weekly.steps' a la ruta de actividad en WeeklyReportCard.vue
+const weeklyReportVuePath = 'src/components/WeeklyReportCard.vue';
+if (fs.existsSync(weeklyReportVuePath)) {
+  let wrVue = fs.readFileSync(weeklyReportVuePath, 'utf8');
+  if (!wrVue.includes("'weekly.steps'")) {
+    wrVue = wrVue.replace(
+      "'weekly.resting_hr': '/heart?focus=resting_hr',",
+      "'weekly.steps': '/activity',\n  'weekly.resting_hr': '/heart?focus=resting_hr',"
+    );
+    fs.writeFileSync(weeklyReportVuePath, wrVue, 'utf8');
+    console.log('[Patch] Enlace de weekly.steps configurado en WeeklyReportCard.vue');
+  }
 }
 
 console.log('[Patch] Proceso de parcheo finalizado con éxito.');
