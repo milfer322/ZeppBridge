@@ -1539,4 +1539,18 @@ if (fs.existsSync(backfillOfferPath)) {
   console.log('[Patch] Boton de descarte en BackfillOffer.vue mejorado');
 }
 
+// 19. Adaptar la cuadrícula de gráficas en WorkoutCharts.vue para evitar espacios vacíos
+const workoutChartsPath = 'src/components/workout/WorkoutCharts.vue';
+if (fs.existsSync(workoutChartsPath)) {
+  let wcCode = fs.readFileSync(workoutChartsPath, 'utf8');
+  if (!wcCode.includes('chart-card:only-child')) {
+    wcCode = wcCode.replace(
+      '.chart-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }',
+      '.chart-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }\n.chart-card:only-child { grid-column: 1 / -1; }\n.chart-card:last-child:nth-child(odd) { grid-column: 1 / -1; }'
+    );
+    fs.writeFileSync(workoutChartsPath, wcCode, 'utf8');
+    console.log('[Patch] Cuadrícula adaptativa configurada en WorkoutCharts.vue para evitar espacios vacíos');
+  }
+}
+
 console.log('[Patch] Proceso de parcheo finalizado con éxito.');

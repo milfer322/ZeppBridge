@@ -1697,7 +1697,62 @@ async def handle_bridge_command(command: str, request: Request):
             return None
         type_overrides = load_json_file("workout_type_overrides.json", {})
         feels = load_json_file("workout_feels.json", {})
-        return normalize_workout_dict(row, type_overrides, feels)
+        res = normalize_workout_dict(row, type_overrides, feels)
+
+        # 1. Consultar zonas de FC oficiales registradas en workout_hr_zones
+        z_rows = query_all(
+            "SELECT zone_index, upper_bound_bpm, seconds FROM workout_hr_zones WHERE workout_id = ? ORDER BY zone_index ASC",
+            (wid,)
+        )
+        if z_rows:
+            res["hr_zones"] = [
+                {
+                    "index": int(z["zone_index"]),
+                    "upper_bound_bpm": int(z["upper_bound_bpm"]),
+                    "seconds": int(z["seconds"])
+                }
+                for z in z_rows
+            ]
+        else:
+            # 2. Si no están en tabla, calcular desde workout_samples si hay FC
+            hr_samples = query_all(
+                "SELECT heart_rate FROM workout_samples WHERE workout_id = ? AND heart_rate IS NOT NULL AND heart_rate > 30 ORDER BY timestamp ASC",
+                (wid,)
+            )
+            if hr_samples and len(hr_samples) >= 10:
+                hrs = [int(s["heart_rate"]) for s in hr_samples]
+                max_observed = max(hrs)
+                max_hr_val = max(160, int(row.get("max_hr") or max_observed))
+                bounds = [
+                    int(round(max_hr_val * 0.60)),
+                    int(round(max_hr_val * 0.70)),
+                    int(round(max_hr_val * 0.80)),
+                    int(round(max_hr_val * 0.90)),
+                    max_hr_val
+                ]
+                counts = [0, 0, 0, 0, 0]
+                for h in hrs:
+                    if h < bounds[0]:
+                        counts[0] += 1
+                    elif h < bounds[1]:
+                        counts[1] += 1
+                    elif h < bounds[2]:
+                        counts[2] += 1
+                    elif h < bounds[3]:
+                        counts[3] += 1
+                    else:
+                        counts[4] += 1
+                res["hr_zones"] = [
+                    {"index": 0, "upper_bound_bpm": bounds[0], "seconds": counts[0]},
+                    {"index": 1, "upper_bound_bpm": bounds[1], "seconds": counts[1]},
+                    {"index": 2, "upper_bound_bpm": bounds[2], "seconds": counts[2]},
+                    {"index": 3, "upper_bound_bpm": bounds[3], "seconds": counts[3]},
+                    {"index": 4, "upper_bound_bpm": bounds[4], "seconds": counts[4]},
+                ]
+            else:
+                res["hr_zones"] = []
+
+        return res
 
     elif command == "get_workout_series":
         wid = body.get("workoutId", "")
@@ -1707,12 +1762,28 @@ async def handle_bridge_command(command: str, request: Request):
             "FROM workout_samples WHERE workout_id = ? ORDER BY timestamp ASC",
             (wid,)
         )
+
+        def calc_pace(p, spd):
+            if spd is not None and float(spd) > 0:
+                v = 1000.0 / (float(spd) * 60.0)
+                if 1.0 <= v < 60.0:
+                    return round(v, 2)
+            if p is not None and float(p) > 0:
+                v = float(p)
+                if 1.0 <= v < 60.0:
+                    return round(v, 2)
+                elif 60.0 <= v < 3600.0:
+                    v_min = v / 60.0
+                    if 1.0 <= v_min < 60.0:
+                        return round(v_min, 2)
+            return None
+
         samples = [
             {
                 "timestamp": s["timestamp"],
                 "heart_rate": s.get("heart_rate"),
                 "speed": s.get("speed"),
-                "pace": s.get("pace"),
+                "pace": calc_pace(s.get("pace"), s.get("speed")),
                 "cadence": s.get("cadence"),
                 "altitude_m": s.get("altitude"),
                 "power_watts": s.get("power_watts"),
