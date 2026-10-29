@@ -3,8 +3,8 @@
 # ==============================================================================
 FROM node:22-bookworm-slim AS frontend-builder
 
-ARG ZEPPBRIDGE_VERSION=3.0.6
-ARG ZEPPBRIDGE_GIT_REF=main
+ARG ZEPPBRIDGE_VERSION=3.1.0
+ARG ZEPPBRIDGE_GIT_REF=v3.1.0
 
 WORKDIR /src
 
@@ -37,7 +37,7 @@ FROM python:3.11-slim-bookworm
 LABEL maintainer="antigravity"
 LABEL description="ZeppBridge Web Nativo - Frontend oficial desacoplado con FastAPI y CLI oficial"
 
-ARG ZEPPBRIDGE_VERSION=3.0.6
+ARG ZEPPBRIDGE_VERSION=3.1.0
 
 WORKDIR /app
 

@@ -1011,7 +1011,7 @@ onMounted(() => {
             </tr>
             <tr>
               <td><strong>🏃 Entrenamientos y Actividades GPS</strong></td>
-              <td>Integrado en la última versión oficial v3.0.6 (v3.0.5 + mejoras de canal avanzado #143).</td>
+              <td>Integrado en la última versión oficial v3.1.0 (v3.1.0 + mejoras de canal avanzado #143).</td>
               <td><span class="diff-tag same">100% Sincronizado</span> Mantiene el planificador de entrenamientos semanales, intervalos y carga TLB en la web.</td>
             </tr>
           </tbody>
@@ -1521,7 +1521,7 @@ if (fs.existsSync(updateSectionPath)) {
   let usCode = fs.readFileSync(updateSectionPath, 'utf8');
   usCode = usCode.replace(
     '{{ t.updateVersion(updateState.currentVersion || t.updateVersionLoading) }}',
-    "{{ t.updateVersion((typeof updateState.currentVersion === 'string' && updateState.currentVersion) ? updateState.currentVersion : (updateState.version || '3.0.6')) }}"
+    "{{ t.updateVersion((typeof updateState.currentVersion === 'string' && updateState.currentVersion) ? updateState.currentVersion : (updateState.version || '3.1.0')) }}"
   );
   fs.writeFileSync(updateSectionPath, usCode, 'utf8');
   console.log('[Patch] Formateo seguro de versión aplicado en UpdateSection.vue');

@@ -192,6 +192,193 @@ def ensure_tables():
                 );
             """)
 
+            # Tablas añadidas en migraciones 41-46 (v3.1.0)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS workout_feedback (
+                    workout_id TEXT PRIMARY KEY,
+                    plan_workout_id INTEGER,
+                    state TEXT NOT NULL CHECK(state IN ('rated', 'dismissed')),
+                    rating INTEGER CHECK(rating BETWEEN 1 AND 5),
+                    tags TEXT NOT NULL DEFAULT '[]',
+                    note TEXT,
+                    adjustment TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    CHECK(state = 'dismissed' OR rating IS NOT NULL)
+                );
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_workout_feedback_plan ON workout_feedback(plan_workout_id);")
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS coach_notes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    text TEXT NOT NULL,
+                    state TEXT NOT NULL CHECK(state IN ('proposed', 'accepted', 'rejected')),
+                    source TEXT NOT NULL CHECK(source IN ('user', 'mcp')),
+                    source_name TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    decided_at TEXT
+                );
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_coach_notes_state ON coach_notes(state, id);")
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS shoes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    sport TEXT NOT NULL,
+                    is_default INTEGER NOT NULL DEFAULT 0,
+                    zepp_gear_id TEXT,
+                    start_km REAL NOT NULL DEFAULT 0,
+                    retire_km REAL NOT NULL DEFAULT 700,
+                    started_on TEXT NOT NULL,
+                    retired_on TEXT,
+                    notes TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+            """)
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS workout_annotations (
+                    workout_id TEXT PRIMARY KEY,
+                    rpe INTEGER CHECK(rpe BETWEEN 1 AND 10),
+                    soreness TEXT NOT NULL DEFAULT '[]',
+                    shoe_mode TEXT NOT NULL DEFAULT 'auto' CHECK(shoe_mode IN ('auto', 'none', 'chosen')),
+                    shoe_id INTEGER,
+                    updated_at TEXT NOT NULL
+                );
+            """)
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS injuries (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    title TEXT NOT NULL,
+                    body_part TEXT,
+                    severity INTEGER CHECK(severity BETWEEN 1 AND 3),
+                    start_date TEXT NOT NULL,
+                    end_date TEXT,
+                    notes TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    CHECK(end_date IS NULL OR end_date >= start_date)
+                );
+            """)
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS races (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    race_date TEXT NOT NULL,
+                    sport TEXT NOT NULL,
+                    distance_m REAL,
+                    goal_seconds INTEGER,
+                    priority TEXT NOT NULL DEFAULT 'a' CHECK(priority IN ('a', 'b', 'c')),
+                    result_seconds INTEGER,
+                    workout_id TEXT,
+                    notes TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_races_date ON races(race_date);")
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS workout_local_state (
+                    workout_id TEXT PRIMARY KEY,
+                    type_override TEXT,
+                    hidden INTEGER NOT NULL DEFAULT 0 CHECK(hidden IN (0, 1)),
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+            """)
+            conn.execute("""
+                CREATE VIEW IF NOT EXISTS workouts_visible AS SELECT * FROM workouts w
+                WHERE NOT EXISTS (SELECT 1 FROM workout_local_state s WHERE s.workout_id = w.workout_id AND s.hidden = 1);
+            """)
+            conn.execute("""
+                CREATE VIEW IF NOT EXISTS workouts_hidden AS SELECT * FROM workouts w
+                WHERE EXISTS (SELECT 1 FROM workout_local_state s WHERE s.workout_id = w.workout_id AND s.hidden = 1);
+            """)
+            conn.execute("""
+                CREATE TRIGGER IF NOT EXISTS restore_local_workout_type AFTER INSERT ON workouts
+                WHEN EXISTS (SELECT 1 FROM workout_local_state s WHERE s.workout_id = NEW.workout_id)
+                BEGIN UPDATE workouts SET workout_type_override = (SELECT type_override FROM workout_local_state WHERE workout_id = NEW.workout_id)
+                      WHERE workout_id = NEW.workout_id; END;
+            """)
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS workout_detail_requests (
+                    workout_id TEXT PRIMARY KEY,
+                    status TEXT NOT NULL,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    requested_at TEXT,
+                    retry_after TEXT,
+                    error_code TEXT
+                );
+            """)
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS data_letters (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    kind TEXT NOT NULL CHECK(kind IN ('weekly', 'capsule')),
+                    period_key TEXT UNIQUE,
+                    written_at TEXT NOT NULL,
+                    open_on TEXT,
+                    opened_at TEXT,
+                    note TEXT NOT NULL DEFAULT '',
+                    body TEXT NOT NULL
+                );
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_data_letters_kind ON data_letters(kind, id);")
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS ai_prompt_versions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    task_id TEXT NOT NULL,
+                    prompt TEXT NOT NULL,
+                    replaced_at TEXT NOT NULL
+                );
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_ai_prompt_versions_task ON ai_prompt_versions(task_id, id);")
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS life_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    title TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    start_date TEXT NOT NULL,
+                    end_date TEXT,
+                    notes TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    CHECK(end_date IS NULL OR end_date >= start_date)
+                );
+            """)
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS import_batches (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source TEXT NOT NULL CHECK(source IN ('gpx', 'fit', 'strava', 'apple_health')),
+                    file_name TEXT,
+                    imported_at TEXT NOT NULL,
+                    added INTEGER NOT NULL,
+                    duplicates INTEGER NOT NULL,
+                    unreadable INTEGER NOT NULL,
+                    undone_at TEXT
+                );
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS workout_imports (
+                    workout_id TEXT PRIMARY KEY,
+                    batch_id INTEGER NOT NULL,
+                    source TEXT NOT NULL,
+                    name TEXT
+                );
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_workout_imports_batch ON workout_imports(batch_id);")
+
             # Asegurar columnas añadidas en migraciones oficiales
             ensure_columns(conn, "workouts", [
                 ("synced_at", "TEXT"),
@@ -242,6 +429,10 @@ def ensure_tables():
                 ("attempts", "INTEGER NOT NULL DEFAULT 0"),
                 ("last_attempt_at", "TEXT"),
                 ("error_code", "TEXT")
+            ])
+
+            ensure_columns(conn, "life_events", [
+                ("epoch", "INTEGER NOT NULL DEFAULT 0")
             ])
 
             conn.commit()

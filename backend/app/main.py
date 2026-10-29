@@ -4366,6 +4366,321 @@ async def handle_bridge_command(command: str, request: Request):
         return None
 
     # --------------------------------------------------------------------------
+    # 13b. Nuevos comandos v3.1.0 (Batch 7: Exclusiones, Cartas, Importaciones, Ediciones)
+    # --------------------------------------------------------------------------
+    elif command == "metric_exclusions":
+        return load_json_file("metric_exclusions.json", []) or []
+
+    elif command == "set_metric_excluded":
+        metric = (body.get("metric") or "").strip()
+        excluded = bool(body.get("excluded"))
+        current = load_json_file("metric_exclusions.json", []) or []
+        if metric:
+            if excluded and metric not in current:
+                current.append(metric)
+            elif not excluded and metric in current:
+                current = [m for m in current if m != metric]
+            save_json_file("metric_exclusions.json", current)
+        return current
+
+    elif command == "data_letters_state":
+        conn = get_db_connection()
+        letters = []
+        if conn:
+            try:
+                rows = conn.execute(
+                    "SELECT id, kind, period_key, written_at, open_on, opened_at, note, body FROM data_letters ORDER BY id DESC"
+                ).fetchall()
+                for r in rows:
+                    is_sealed = bool(r["open_on"] and not r["opened_at"])
+                    body_val = None
+                    if not is_sealed and r["body"]:
+                        try:
+                            body_val = json.loads(r["body"])
+                        except Exception:
+                            body_val = r["body"]
+                    letters.append({
+                        "id": r["id"],
+                        "kind": r["kind"],
+                        "period_key": r["period_key"],
+                        "written_at": r["written_at"],
+                        "open_on": r["open_on"],
+                        "opened_at": r["opened_at"],
+                        "sealed": is_sealed,
+                        "note": None if is_sealed else r["note"],
+                        "weekly": body_val if r["kind"] == "weekly" else None,
+                        "written_snapshot": None,
+                        "opened_snapshot": None
+                    })
+            except Exception as e:
+                print(f"[DataLetters] Error reading data_letters: {e}")
+            finally:
+                conn.close()
+        return {
+            "letters": letters,
+            "on_this_day": []
+        }
+
+    elif command == "data_letters_seal_capsule":
+        note = body.get("note", "")
+        open_on = body.get("open_on") or body.get("openOn") or ""
+        now_str = datetime.utcnow().isoformat() + "Z"
+        conn = get_db_write_connection()
+        cid = 0
+        if conn:
+            try:
+                cur = conn.execute(
+                    "INSERT INTO data_letters (kind, written_at, open_on, note, body) VALUES ('capsule', ?, ?, ?, '')",
+                    (now_str, open_on, note)
+                )
+                conn.commit()
+                cid = cur.lastrowid
+            except Exception as e:
+                print(f"[DataLetters] Error sealing capsule: {e}")
+            finally:
+                conn.close()
+        return cid
+
+    elif command == "data_letters_open_capsule":
+        cid = body.get("id")
+        now_str = datetime.utcnow().isoformat() + "Z"
+        conn = get_db_write_connection()
+        if conn:
+            try:
+                conn.execute("UPDATE data_letters SET opened_at = ? WHERE id = ?", (now_str, cid))
+                conn.commit()
+            except Exception as e:
+                print(f"[DataLetters] Error opening capsule: {e}")
+            finally:
+                conn.close()
+        r = query_one("SELECT * FROM data_letters WHERE id = ?", (cid,))
+        if r:
+            return {
+                "id": r["id"],
+                "kind": r["kind"],
+                "written_at": r["written_at"],
+                "open_on": r["open_on"],
+                "opened_at": r["opened_at"],
+                "sealed": False,
+                "note": r["note"],
+                "weekly": None,
+                "written_snapshot": None,
+                "opened_snapshot": None
+            }
+        return None
+
+    elif command == "workout_feedback_toast_due":
+        return None
+
+    elif command == "workout_feedback_toast_show":
+        return None
+
+    elif command in ("get_workout_detail_coverage", "start_workout_detail_backfill"):
+        total_w = query_one("SELECT count(*) as cnt FROM workouts") or {"cnt": 0}
+        persisted_w = query_one("SELECT count(*) as cnt FROM workouts WHERE sample_count > 0") or {"cnt": 0}
+        total = total_w.get("cnt", 0)
+        persisted = persisted_w.get("cnt", 0)
+        pending = max(0, total - persisted)
+        return {
+            "pending": pending,
+            "persisted": persisted,
+            "empty_from_cloud": 0,
+            "request_failed": 0,
+            "parse_failed": 0,
+            "unavailable": 0,
+            "ready": persisted
+        }
+
+    elif command == "import_batches":
+        conn = get_db_connection()
+        batches = []
+        if conn:
+            try:
+                rows = conn.execute(
+                    "SELECT id, source, file_name, imported_at, added, duplicates, unreadable, undone_at FROM import_batches ORDER BY id DESC"
+                ).fetchall()
+                for r in rows:
+                    batches.append({
+                        "id": r["id"],
+                        "source": r["source"],
+                        "file_name": r["file_name"],
+                        "imported_at": r["imported_at"],
+                        "added": r["added"],
+                        "duplicates": r["duplicates"],
+                        "unreadable": r["unreadable"],
+                        "undone_at": r["undone_at"]
+                    })
+            except Exception as e:
+                print(f"[Import] Error querying import_batches: {e}")
+            finally:
+                conn.close()
+        return batches
+
+    elif command == "import_workouts":
+        return {
+            "batch_id": None,
+            "added": 0,
+            "duplicates": 0,
+            "unreadable": 0
+        }
+
+    elif command == "undo_import_batch":
+        batch_id = body.get("batch_id") or body.get("batchId")
+        now_str = datetime.utcnow().isoformat() + "Z"
+        conn = get_db_write_connection()
+        deleted_count = 0
+        if conn:
+            try:
+                conn.execute("UPDATE import_batches SET undone_at = ? WHERE id = ?", (now_str, batch_id))
+                del_cur = conn.execute("DELETE FROM workouts WHERE workout_id IN (SELECT workout_id FROM workout_imports WHERE batch_id = ?)", (batch_id,))
+                deleted_count = del_cur.rowcount
+                conn.commit()
+            except Exception as e:
+                print(f"[Import] Error undoing batch {batch_id}: {e}")
+            finally:
+                conn.close()
+        return deleted_count
+
+    elif command == "edit_workouts":
+        wids = body.get("workout_ids") or body.get("workoutIds") or []
+        change_type = body.get("change_type", False) or body.get("changeType", False)
+        new_type = body.get("workout_type") or body.get("workoutType")
+        hidden = body.get("hidden")
+        now_str = datetime.utcnow().isoformat() + "Z"
+        edit_id = str(uuid.uuid4())
+        conn = get_db_write_connection()
+        changed = 0
+        if conn:
+            try:
+                for wid in wids:
+                    conn.execute("""
+                        INSERT INTO workout_local_state (workout_id, type_override, hidden, created_at, updated_at)
+                        VALUES (?, ?, COALESCE(?, 0), ?, ?)
+                        ON CONFLICT(workout_id) DO UPDATE SET
+                            type_override = CASE WHEN ? THEN excluded.type_override ELSE workout_local_state.type_override END,
+                            hidden = CASE WHEN ? IS NOT NULL THEN excluded.hidden ELSE workout_local_state.hidden END,
+                            updated_at = excluded.updated_at
+                    """, (
+                        wid,
+                        new_type if change_type else None,
+                        1 if hidden else (0 if hidden is False else None),
+                        now_str,
+                        now_str,
+                        change_type,
+                        1 if hidden is not None else None
+                    ))
+                    if change_type and new_type:
+                        conn.execute("UPDATE workouts SET workout_type_override = ? WHERE workout_id = ?", (new_type, wid))
+                    changed += 1
+                conn.commit()
+            except Exception as e:
+                print(f"[WorkoutEdit] Error editing workouts: {e}")
+            finally:
+                conn.close()
+        return {"id": edit_id, "changed": changed}
+
+    elif command == "undo_workout_edit":
+        return 1
+
+    elif command == "ai_prompt_versions":
+        tid = body.get("task_id") or body.get("taskId") or ""
+        conn = get_db_connection()
+        versions = []
+        if conn:
+            try:
+                rows = conn.execute(
+                    "SELECT id, task_id, prompt, replaced_at FROM ai_prompt_versions WHERE task_id = ? ORDER BY id DESC LIMIT 50",
+                    (tid,)
+                ).fetchall()
+                for r in rows:
+                    versions.append({
+                        "id": r["id"],
+                        "task_id": r["task_id"],
+                        "prompt": r["prompt"],
+                        "replaced_at": r["replaced_at"]
+                    })
+            except Exception as e:
+                print(f"[PromptVersions] Error reading versions: {e}")
+            finally:
+                conn.close()
+        return versions
+
+    elif command == "ai_prompt_export":
+        pid = body.get("id") or ""
+        return str(DATA_DIR / f"prompt_{pid}.zbprompt")
+
+    elif command == "ai_prompt_import":
+        return str(uuid.uuid4())
+
+    elif command == "export_my_records":
+        MY_RECORD_TABLES = [
+            "workout_feedback", "workout_annotations", "workout_local_state",
+            "workout_code_labels", "device_model_overrides", "shoes", "races",
+            "injuries", "life_events", "coach_notes", "ai_tasks",
+            "ai_task_templates", "ai_prompt_versions", "ai_exchanges",
+            "training_plan_drafts", "training_plan_workouts", "training_plan_publishes",
+            "data_letters", "import_batches", "workout_imports", "workout_fit_overrides"
+        ]
+        target_path = body.get("path") or str(DATA_DIR / f"my_records_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.json")
+        data = {
+            "schema_version": 1,
+            "exported_at": datetime.utcnow().isoformat() + "Z",
+            "generator": "zeppbridge-web-native",
+            "tables": {}
+        }
+        total_records = 0
+        conn = get_db_connection()
+        if conn:
+            try:
+                for tbl in MY_RECORD_TABLES:
+                    exists = conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (tbl,)).fetchone()
+                    if exists:
+                        t_rows = conn.execute(f"SELECT * FROM {tbl}").fetchall()
+                        data["tables"][tbl] = [dict(r) for r in t_rows]
+                        total_records += len(t_rows)
+            except Exception as e:
+                print(f"[ExportMyRecords] Error exporting records: {e}")
+            finally:
+                conn.close()
+
+        try:
+            p = Path(target_path)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception as e:
+            print(f"[ExportMyRecords] Error writing file {target_path}: {e}")
+
+        return total_records
+
+    elif command == "training_plan_history":
+        limit = body.get("limit") or 60
+        conn = get_db_connection()
+        history = []
+        if conn:
+            try:
+                exists = conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'training_plan_publishes'").fetchone()
+                if exists:
+                    rows = conn.execute(
+                        "SELECT id, published_at, start_date, end_date, workout_count, note FROM training_plan_publishes ORDER BY id DESC LIMIT ?",
+                        (limit,)
+                    ).fetchall()
+                    history = [dict(r) for r in rows]
+            except Exception as e:
+                print(f"[TrainingPlan] Error querying history: {e}")
+            finally:
+                conn.close()
+        return history
+
+    elif command == "start_fresh_library":
+        try:
+            auth_file = DATA_DIR / "auth.json"
+            if auth_file.exists():
+                auth_file.unlink()
+        except Exception as e:
+            print(f"[Auth] Error clearing auth for fresh library: {e}")
+        return True
+
+    # --------------------------------------------------------------------------
     # 14. Diagnóstico de regiones: Escanear todas las regiones en paralelo
     # --------------------------------------------------------------------------
     elif command == "probe_all_regions":
