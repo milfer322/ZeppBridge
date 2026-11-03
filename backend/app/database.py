@@ -344,6 +344,14 @@ def ensure_tables():
             conn.execute("CREATE INDEX IF NOT EXISTS idx_ai_prompt_versions_task ON ai_prompt_versions(task_id, id);")
 
             conn.execute("""
+                CREATE TABLE IF NOT EXISTS device_local_state (
+                    device_key TEXT PRIMARY KEY,
+                    hidden INTEGER NOT NULL DEFAULT 0,
+                    updated_at TEXT NOT NULL
+                );
+            """)
+
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS life_events (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     title TEXT NOT NULL,

@@ -2490,8 +2490,33 @@ async def handle_bridge_command(command: str, request: Request):
 
         save_json_file("device_profiles.json", profiles)
 
+        # Filtrar dispositivos ocultos (v47 / v3.1.1)
+        hidden_keys = set()
+        conn = get_db_connection()
+        if conn:
+            try:
+                rows = conn.execute("SELECT lower(device_key) as k FROM device_local_state WHERE hidden = 1").fetchall()
+                hidden_keys = {r["k"] for r in rows if r["k"]}
+            except Exception:
+                pass
+            finally:
+                conn.close()
+
+        visible_profiles = []
+        hidden_profiles = []
+        for p in profiles:
+            p_did = str(p.get("device_id") or "").lower()
+            p_sn = str(p.get("serial") or "").lower()
+            if (p_did and p_did in hidden_keys) or (p_sn and p_sn in hidden_keys):
+                p_copy = dict(p)
+                p_copy["hidden"] = True
+                hidden_profiles.append(p_copy)
+            else:
+                visible_profiles.append(p)
+
         return {
-            "profiles": profiles,
+            "profiles": visible_profiles,
+            "hidden_profiles": hidden_profiles,
             "cache": {
                 "status": "fresh",
                 "cached_at": now_iso,
@@ -4740,6 +4765,40 @@ async def handle_bridge_command(command: str, request: Request):
         except Exception as e:
             print(f"[Auth] Error clearing auth for fresh library: {e}")
         return True
+
+    # --------------------------------------------------------------------------
+    # 13c. Nuevos comandos v3.1.1 (Ocultar dispositivos, Credenciales, AutoSync)
+    # --------------------------------------------------------------------------
+    elif command == "set_device_hidden":
+        device_key = (body.get("device_key") or body.get("deviceKey") or "").strip()
+        hidden = bool(body.get("hidden"))
+        now_str = datetime.utcnow().isoformat() + "Z"
+        conn = get_db_write_connection()
+        if conn and device_key:
+            try:
+                conn.execute("DELETE FROM device_local_state WHERE lower(device_key) = lower(?)", (device_key,))
+                if hidden:
+                    conn.execute("INSERT INTO device_local_state (device_key, hidden, updated_at) VALUES (?, 1, ?)", (device_key, now_str))
+                conn.commit()
+            except Exception as e:
+                print(f"[Device] Error setting device hidden: {e}")
+            finally:
+                conn.close()
+        return None
+
+    elif command == "set_auto_sync_prefs":
+        # Recibir preferencias de auto-sync desde frontend
+        enabled = bool(body.get("enabled", True))
+        interval = int(body.get("interval_minutes") or body.get("intervalMinutes") or 60)
+        prefs = load_json_file("auto_sync_prefs.json", {})
+        prefs["enabled"] = enabled
+        prefs["interval_minutes"] = interval
+        save_json_file("auto_sync_prefs.json", prefs)
+        return None
+
+    elif command in ("recover_official_credentials", "recover_advanced_credentials"):
+        # En contenedor Docker/Web las credenciales se almacenan en archivo persistente
+        return get_auth_status()
 
     # --------------------------------------------------------------------------
     # 14. Diagnóstico de regiones: Escanear todas las regiones en paralelo

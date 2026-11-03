@@ -270,7 +270,7 @@
       if (command.includes('plugin:updater') || command.startsWith('update_')) {
         return {
           phase: 'up_to_date',
-          version: '3.1.0',
+          version: '3.1.1',
           notes: null,
           date: null,
           downloaded: 0,
@@ -281,7 +281,7 @@
         };
       }
       if (command === 'plugin:app|version' || command === 'plugin:app|get_version' || command === 'app_version') {
-        return '3.1.0';
+        return '3.1.1';
       }
       if (command === 'plugin:app|name' || command === 'plugin:app|get_name' || command === 'app_name') {
         return 'ZeppBridge';

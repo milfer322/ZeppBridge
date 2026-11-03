@@ -4,8 +4,8 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        - ZEPPBRIDGE_VERSION=3.1.0
-        - ZEPPBRIDGE_GIT_REF=v3.1.0
+        - ZEPPBRIDGE_VERSION=3.1.1
+        - ZEPPBRIDGE_GIT_REF=v3.1.1
     image: zeppbridge:web-native
     container_name: zeppbridge
     restart: unless-stopped
