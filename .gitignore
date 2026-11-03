@@ -47,6 +47,7 @@ dist-ssr/
 *.local
 
 # IDE y Sistema Operativo
+scratch/
 .DS_Store
 Thumbs.db
 desktop.ini

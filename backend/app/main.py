@@ -2113,16 +2113,19 @@ async def handle_bridge_command(command: str, request: Request):
                     odi_dict[m_name] = r["value"]
 
             # 2. Obtener curva de FC minuto a minuto durante la ventana de sueño
-            st_clean = st.replace("Z", "+00:00")
-            et_clean = et.replace("Z", "+00:00")
+            st_raw = str(row.get("start_time") or "")
+            et_raw = str(row.get("end_time") or "")
+            st_space = st_raw.replace("T", " ")[:19]
+            et_space = et_raw.replace("T", " ")[:19]
             hr_rows = query_all(
                 "SELECT timestamp, value FROM metric_samples "
-                "WHERE metric = 'heart_rate' AND timestamp >= ? AND timestamp <= ? "
+                "WHERE metric = 'heart_rate' "
+                "AND replace(timestamp, 'T', ' ') >= ? AND replace(timestamp, 'T', ' ') <= ? "
                 "ORDER BY timestamp ASC",
-                (st, et)
+                (st_space, et_space)
             )
 
-            # Analizar picos cardíacos nocturnos (arousals simpáticos >= 8 bpm en <= 2 min)
+            # Analizar picos cardíacos nocturnos (arousals simpáticos >= 8 bpm en reposo)
             hr_series = []
             hr_values = []
             hr_spikes = 0
@@ -2139,7 +2142,8 @@ async def handle_bridge_command(command: str, request: Request):
                             spike_events.append({
                                 "time": h["timestamp"],
                                 "hr": v,
-                                "jump": diff
+                                "jump": diff,
+                                "index": len(hr_series) - 1
                             })
 
             dur_hours = (row.get("duration_minutes") or 1) / 60.0

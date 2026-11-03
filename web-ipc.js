@@ -2,6 +2,14 @@
 // ZeppBridge Web-IPC Bridge: Emulador completo del ecosistema Tauri para Web
 // ==============================================================================
 (function() {
+  // Pre-inicializar flags de tour para evitar que salte el tutorial en cada actualización o reinicio
+  try {
+    localStorage.setItem('zeppbridge.tour.firstLaunch', '1');
+    localStorage.setItem('zeppbridge.tour.version', '999');
+    const allTourChapters = ['intro', 'home', 'metric', 'workouts', 'sleep', 'ai', 'plan', 'journal', 'letters', 'devices', 'settings'];
+    localStorage.setItem('zeppbridge.tour.seen', JSON.stringify(allTourChapters));
+  } catch (e) {}
+
   // Asegurar formato de hora 24h por defecto en toda la app
   try {
     const currentTimeFormat = localStorage.getItem('zeppbridge-time-format');

@@ -1584,16 +1584,25 @@ const sleepHrChartOption = computed(() => {
   const hrs = seriesData.map((d: any) => d.hr);
 
   const spikeTimes = new Set((breathing.value.spike_events || []).map((e: any) => formatTime(e.time)));
-  const spikeScatterData = seriesData
-    .map((d: any) => {
-      const t = formatTime(d.time);
-      return spikeTimes.has(t) ? [t, d.hr] : null;
-    })
-    .filter(Boolean);
+  const spikeEvents = breathing.value.spike_events || [];
+
+  const markPoints = spikeEvents.map((e: any) => {
+    const t = formatTime(e.time);
+    return {
+      name: 'Aceleración',
+      coord: [t, e.hr],
+      value: e.jump
+    };
+  });
+
+  const scatterPoints = seriesData.map((d: any, idx: number) => {
+    const isSpike = spikeTimes.has(formatTime(d.time));
+    return isSpike ? [idx, d.hr] : null;
+  }).filter((item: any) => item !== null);
 
   return {
     animation: false,
-    grid: { left: 38, right: 16, top: 24, bottom: 24, containLabel: false },
+    grid: { left: 42, right: 20, top: 26, bottom: 26, containLabel: false },
     tooltip: {
       trigger: 'axis',
       transitionDuration: 0,
@@ -1602,17 +1611,17 @@ const sleepHrChartOption = computed(() => {
       borderWidth: 1,
       textStyle: { color: palette.tooltipText, fontSize: 13 },
       formatter: (params: any) => {
-        let res = '';
-        let isSpike = false;
-        for (const p of params) {
-          if (p.seriesName === 'Aceleración Cardíaca') {
-            isSpike = true;
-          } else if (p.seriesName === 'Frecuencia Cardíaca') {
-            res = \`\${p.name}<br/><strong>\${p.value} ppm</strong>\`;
-          }
-        }
-        if (isSpike) {
-          res += '<br/><span style="color:#ef4444;font-weight:600;">⚠️ Evento / Aceleración (≥8 ppm)</span>';
+        if (!params || !params.length) return '';
+        const p = Array.isArray(params) ? params[0] : params;
+        const timeName = p.name;
+        const hrVal = p.value;
+        let res = \`<div style="font-weight:600;margin-bottom:2px;">\${timeName}</div>\`;
+        res += \`<div style="display:flex;align-items:center;gap:6px;"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#06b6d4;"></span>FC: <strong>\${hrVal} ppm</strong></div>\`;
+        const spike = spikeEvents.find((e: any) => formatTime(e.time) === timeName);
+        if (spike) {
+          res += \`<div style="margin-top:6px;padding-top:4px;border-top:1px dashed \${palette.splitLine};color:#ef4444;font-weight:600;display:flex;align-items:center;gap:4px;">\` +
+            \`<span>⚠️ Salto reactivo: +\${spike.jump} ppm</span>\` +
+            \`</div><div style="font-size:11px;color:\${palette.axis};">Microdespertar / Alerta SomnusCare</div>\`;
         }
         return res;
       }
@@ -1648,15 +1657,34 @@ const sleepHrChartOption = computed(() => {
               { offset: 1, color: 'rgba(6, 182, 212, 0.00)' }
             ]
           }
+        },
+        markPoint: {
+          symbol: 'circle',
+          symbolSize: 10,
+          itemStyle: {
+            color: '#ef4444',
+            borderColor: '#ffffff',
+            borderWidth: 2,
+            shadowColor: 'rgba(239, 68, 68, 0.75)',
+            shadowBlur: 8
+          },
+          label: { show: false },
+          data: markPoints
         }
       },
       {
         name: 'Aceleración Cardíaca',
         type: 'scatter',
         symbol: 'circle',
-        symbolSize: 8,
-        itemStyle: { color: '#ef4444', borderWidth: 2, borderColor: '#fff' },
-        data: spikeScatterData,
+        symbolSize: 10,
+        itemStyle: {
+          color: '#ef4444',
+          borderColor: '#ffffff',
+          borderWidth: 2,
+          shadowColor: 'rgba(239, 68, 68, 0.75)',
+          shadowBlur: 8
+        },
+        data: scatterPoints,
         z: 10
       }
     ]
@@ -1811,6 +1839,50 @@ if (fs.existsSync(sleepDetailCssPath)) {
 `;
     fs.writeFileSync(sleepDetailCssPath, sdCss, 'utf8');
     console.log('[Patch] Estilos de apnea agregados en SleepDetail.css');
+  }
+}
+
+// 22. Registrar ScatterChart y MarkPointComponent en echartsSetup.ts para visualización de eventos de salud
+const echartsSetupPath = 'src/lib/echartsSetup.ts';
+if (fs.existsSync(echartsSetupPath)) {
+  let ecCode = fs.readFileSync(echartsSetupPath, 'utf8');
+  if (!ecCode.includes('ScatterChart')) {
+    ecCode = ecCode.replace(
+      "import { BarChart, LineChart, PieChart } from 'echarts/charts';",
+      "import { BarChart, LineChart, PieChart, ScatterChart } from 'echarts/charts';"
+    );
+    ecCode = ecCode.replace(
+      "  MarkAreaComponent,\n  MarkLineComponent,\n  TooltipComponent,",
+      "  MarkAreaComponent,\n  MarkLineComponent,\n  MarkPointComponent,\n  TooltipComponent,"
+    );
+    ecCode = ecCode.replace(
+      "  PieChart,\n  GridComponent,",
+      "  PieChart,\n  ScatterChart,\n  GridComponent,"
+    );
+    ecCode = ecCode.replace(
+      "  MarkAreaComponent,\n  CanvasRenderer,",
+      "  MarkAreaComponent,\n  MarkPointComponent,\n  CanvasRenderer,"
+    );
+    fs.writeFileSync(echartsSetupPath, ecCode, 'utf8');
+    console.log('[Patch] ScatterChart y MarkPointComponent registrados en echartsSetup.ts');
+  }
+}
+
+// 23. Desactivar el lanzamiento forzado del tutorial / tour de bienvenida en cada actualización
+const tourLayerPath = 'src/components/tour/TourLayer.vue';
+if (fs.existsSync(tourLayerPath)) {
+  let tlCode = fs.readFileSync(tourLayerPath, 'utf8');
+  if (!tlCode.includes('// Tour forzado desactivado para entorno web')) {
+    tlCode = tlCode.replace(
+      "const decideRetour = async () => {",
+      "const decideRetour = async () => {\n  // Tour forzado desactivado para entorno web\n  markTourVersion(false);\n  return;"
+    );
+    tlCode = tlCode.replace(
+      "const decideFirstLaunch = async () => {",
+      "const decideFirstLaunch = async () => {\n  // Tour forzado desactivado para entorno web\n  markFirstLaunchHandled();\n  markTourVersion(false);\n  return;"
+    );
+    fs.writeFileSync(tourLayerPath, tlCode, 'utf8');
+    console.log('[Patch] Lanzamiento automático de tutorial desactivado en TourLayer.vue');
   }
 }
 
