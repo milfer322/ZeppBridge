@@ -1553,4 +1553,185 @@ if (fs.existsSync(workoutChartsPath)) {
   }
 }
 
+// 20. Análisis de Calidad Respiratoria y Apnea Nocturna (ODI / FC) en SleepDetail.vue
+const sleepDetailPath = 'src/views/SleepDetail.vue';
+if (fs.existsSync(sleepDetailPath)) {
+  let sdCode = fs.readFileSync(sleepDetailPath, 'utf8');
+  if (!sdCode.includes('apnea-card')) {
+    const scriptTarget = "const weeklyChartOption = computed(() => {";
+    const scriptAddition = `// Análisis de Respiración y Apnea Nocturna (ODI / FC)
+const breathing = computed(() => (session.value as any)?.breathing_analysis || null);
+
+const breathingStatus = computed(() => {
+  if (!breathing.value) return null;
+  const odi = breathing.value.odi;
+  if (odi === null || odi === undefined) {
+    if (breathing.value.hr_spike_index >= 10) return { label: 'Inestabilidad Cardíaca Alta', tone: 'danger' };
+    if (breathing.value.hr_spike_index >= 5) return { label: 'Inestabilidad Cardíaca Moderada', tone: 'warning' };
+    return { label: 'Estable', tone: 'good' };
+  }
+  if (odi < 5) return { label: 'Normal (< 5/h)', tone: 'good' };
+  if (odi < 15) return { label: 'Leve (5–14/h)', tone: 'warning' };
+  if (odi < 30) return { label: 'Moderada (15–29/h)', tone: 'danger' };
+  return { label: 'Severa (≥ 30/h)', tone: 'danger' };
+});
+
+const sleepHrChartOption = computed(() => {
+  if (!breathing.value || !breathing.value.hr_series || breathing.value.hr_series.length === 0) return null;
+  const palette = chartPalette.value;
+  const seriesData = breathing.value.hr_series;
+  const times = seriesData.map((d: any) => formatTime(d.time));
+  const hrs = seriesData.map((d: any) => d.hr);
+
+  return {
+    animation: false,
+    grid: { left: 38, right: 16, top: 24, bottom: 24, containLabel: false },
+    tooltip: {
+      trigger: 'axis',
+      transitionDuration: 0,
+      backgroundColor: palette.tooltipBg,
+      borderColor: palette.tooltipBorder,
+      borderWidth: 1,
+      textStyle: { color: palette.tooltipText, fontSize: 13 },
+      formatter: (params: any) => {
+        const p = params[0];
+        return p ? \`\${p.name}<br/><strong>\${p.value} ppm</strong>\` : '';
+      }
+    },
+    xAxis: {
+      type: 'category',
+      data: times,
+      axisLabel: { color: palette.axis, fontSize: 11, interval: Math.floor(times.length / 6) },
+      axisLine: { lineStyle: { color: palette.splitLine } },
+      axisTick: { show: false }
+    },
+    yAxis: {
+      type: 'value',
+      min: (val: any) => Math.max(35, val.min - 5),
+      max: (val: any) => Math.min(160, val.max + 5),
+      axisLabel: { color: palette.axis, fontSize: 11 },
+      splitLine: { lineStyle: { color: palette.splitLine, type: 'dashed' } }
+    },
+    series: [
+      {
+        name: 'Frecuencia Cardíaca',
+        type: 'line',
+        smooth: true,
+        showSymbol: false,
+        data: hrs,
+        lineStyle: { color: '#06b6d4', width: 2 },
+        areaStyle: {
+          color: {
+            type: 'linear',
+            x: 0, y: 0, x2: 0, y2: 1,
+            colorStops: [
+              { offset: 0, color: 'rgba(6, 182, 212, 0.28)' },
+              { offset: 1, color: 'rgba(6, 182, 212, 0.00)' }
+            ]
+          }
+        }
+      }
+    ]
+  };
+});
+
+const weeklyChartOption = computed(() => {`;
+
+    const templateTarget = "      <!-- 睡眠阶段 -->";
+    const templateAddition = `      <!-- Análisis de Calidad Respiratoria y Apnea (ODI / FC Nocturna) -->
+      <section v-if="breathing" class="surface-card apnea-card" aria-label="Calidad de Respiración y Apnea">
+        <div class="stage-head">
+          <div class="apnea-title-group">
+            <span class="apnea-icon-badge"><Icon name="health-heart" :size="18" /></span>
+            <div>
+              <h2>Respiración y Apnea Nocturna</h2>
+              <p class="apnea-subtitle">Índice de desaturación de oxígeno (ODI) y estabilidad cardíaca</p>
+            </div>
+          </div>
+          <span v-if="breathingStatus" class="apnea-badge" :class="'tone-' + breathingStatus.tone">
+            {{ breathingStatus.label }}
+          </span>
+        </div>
+
+        <div class="apnea-stats-grid">
+          <div class="apnea-stat-item">
+            <span class="stat-label">Índice ODI</span>
+            <strong class="stat-value">{{ (breathing.odi !== null && breathing.odi !== undefined) ? breathing.odi : '—' }} <small v-if="breathing.odi !== null">/h</small></strong>
+            <span class="stat-desc">Desaturaciones O₂ por hora</span>
+          </div>
+          <div class="apnea-stat-item">
+            <span class="stat-label">Puntuación Respiratoria</span>
+            <strong class="stat-value">{{ (breathing.score !== null && breathing.score !== undefined) ? breathing.score : '—' }} <small v-if="breathing.score !== null">/ 100</small></strong>
+            <span class="stat-desc">Calidad calculada por el reloj</span>
+          </div>
+          <div class="apnea-stat-item">
+            <span class="stat-label">Eventos Totales O₂</span>
+            <strong class="stat-value">{{ (breathing.events !== null && breathing.events !== undefined) ? breathing.events : '—' }}</strong>
+            <span class="stat-desc">Caídas registradas de SpO₂</span>
+          </div>
+          <div class="apnea-stat-item">
+            <span class="stat-label">Aceleraciones FC</span>
+            <strong class="stat-value">{{ (breathing.hr_spikes !== null && breathing.hr_spikes !== undefined) ? breathing.hr_spikes : '0' }} <small>(~{{ breathing.hr_spike_index }}/h)</small></strong>
+            <span class="stat-desc">Saltos súbitos ≥14 ppm en reposo</span>
+          </div>
+        </div>
+
+        <!-- Gráfica continua de pulso durante el sueño -->
+        <div v-if="sleepHrChartOption" class="apnea-chart-box">
+          <div class="chart-header">
+            <span class="chart-title">Curva de Frecuencia Cardíaca durante el Sueño</span>
+            <span class="chart-legend-span">
+              Mín: <strong>{{ breathing.hr_min || '—' }}</strong> · Prom: <strong>{{ breathing.hr_avg || '—' }}</strong> · Máx: <strong>{{ breathing.hr_max || '—' }} ppm</strong>
+            </span>
+          </div>
+          <VChart class="sleep-hr-chart" :theme="CHART_THEME" :option="sleepHrChartOption" autoresize role="img" aria-label="Curva FC sueño" />
+        </div>
+      </section>
+
+      <!-- 睡眠阶段 -->`;
+
+    if (sdCode.includes(scriptTarget)) {
+      sdCode = sdCode.replace(scriptTarget, scriptAddition);
+    }
+    if (sdCode.includes(templateTarget)) {
+      sdCode = sdCode.replace(templateTarget, templateAddition);
+    }
+    fs.writeFileSync(sleepDetailPath, sdCode, 'utf8');
+    console.log('[Patch] Módulo y gráfica de apnea/respiración integrados en SleepDetail.vue');
+  }
+}
+
+// 21. Estilos para la tarjeta de apnea en SleepDetail.css
+const sleepDetailCssPath = 'src/views/SleepDetail.css';
+if (fs.existsSync(sleepDetailCssPath)) {
+  let sdCss = fs.readFileSync(sleepDetailCssPath, 'utf8');
+  if (!sdCss.includes('.apnea-card')) {
+    sdCss += `
+/* Tarjeta de Apnea y Respiración Nocturna */
+.apnea-card { display: grid; gap: 16px; padding: 20px; border-radius: var(--radius-lg); background: var(--mat-card); box-shadow: var(--mat-rim), var(--mat-shadow); border: 1px solid var(--line); }
+.apnea-title-group { display: flex; align-items: center; gap: 12px; }
+.apnea-icon-badge { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 10px; background: rgba(6, 182, 212, 0.12); color: #06b6d4; }
+.apnea-subtitle { margin: 2px 0 0; font-size: 13px; color: var(--muted); }
+.apnea-badge { display: inline-flex; align-items: center; padding: 4px 12px; border-radius: 999px; font-size: 13px; font-weight: 600; }
+.apnea-badge.tone-good { background: rgba(34, 197, 94, 0.14); color: #16a34a; }
+.apnea-badge.tone-warning { background: rgba(234, 179, 8, 0.14); color: #ca8a04; }
+.apnea-badge.tone-danger { background: rgba(239, 68, 68, 0.14); color: #dc2626; }
+.apnea-stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
+.apnea-stat-item { display: flex; flex-direction: column; gap: 2px; padding: 12px 14px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-md); }
+.stat-label { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; }
+.stat-value { font-size: 22px; font-weight: 700; color: var(--ink); font-variant-numeric: tabular-nums; }
+.stat-value small { font-size: 13px; color: var(--muted); font-weight: 500; }
+.stat-desc { font-size: 11px; color: var(--muted); margin-top: 2px; }
+.apnea-chart-box { display: grid; gap: 10px; padding-top: 10px; border-top: 1px dashed var(--line); }
+.chart-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 13px; }
+.chart-title { font-weight: 600; color: var(--ink); }
+.chart-legend-span { color: var(--muted); }
+.chart-legend-span strong { color: #06b6d4; font-weight: 600; }
+.sleep-hr-chart { width: 100%; height: 180px; }
+`;
+    fs.writeFileSync(sleepDetailCssPath, sdCss, 'utf8');
+    console.log('[Patch] Estilos de apnea agregados en SleepDetail.css');
+  }
+}
+
 console.log('[Patch] Proceso de parcheo finalizado con éxito.');

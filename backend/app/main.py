@@ -2090,6 +2090,67 @@ async def handle_bridge_command(command: str, request: Request):
                 {"stage": s["stage"], "start_time": s["start_time"], "end_time": s["end_time"]}
                 for s in stages_rows
             ]
+
+            # ------------------------------------------------------------------
+            # Enriquecimiento para Respiración Nocturna / Análisis de Apnea (ODI)
+            # ------------------------------------------------------------------
+            st = str(row.get("start_time") or "")
+            et = str(row.get("end_time") or "")
+            d_start = st[:10]
+            d_end = et[:10]
+
+            # 1. Obtener métricas diarias de desaturación de oxígeno (ODI)
+            odi_rows = query_all(
+                "SELECT metric, value, date FROM daily_metrics "
+                "WHERE metric IN ('spo2_odi', 'spo2_night_score', 'spo2_measured_minutes', 'spo2_odi_events') "
+                "AND date IN (?, ?) ORDER BY date DESC",
+                (d_start, d_end)
+            )
+            odi_dict = {}
+            for r in odi_rows:
+                m_name = r["metric"]
+                if m_name not in odi_dict:
+                    odi_dict[m_name] = r["value"]
+
+            # 2. Obtener curva de FC minuto a minuto durante la ventana de sueño
+            st_clean = st.replace("Z", "+00:00")
+            et_clean = et.replace("Z", "+00:00")
+            hr_rows = query_all(
+                "SELECT timestamp, value FROM metric_samples "
+                "WHERE metric = 'heart_rate' AND timestamp >= ? AND timestamp <= ? "
+                "ORDER BY timestamp ASC",
+                (st, et)
+            )
+
+            # Analizar picos cardíacos nocturnos (arousals simpáticos >= 14 bpm en <= 2 min)
+            hr_series = []
+            hr_values = []
+            hr_spikes = 0
+            for i, h in enumerate(hr_rows):
+                v = int(round(h["value"])) if h.get("value") is not None else None
+                if v is not None:
+                    hr_values.append(v)
+                    hr_series.append({"time": h["timestamp"], "hr": v})
+                    if i > 0 and hr_rows[i-1].get("value") is not None:
+                        diff = v - int(round(hr_rows[i-1]["value"]))
+                        if diff >= 14:
+                            hr_spikes += 1
+
+            dur_hours = (row.get("duration_minutes") or 1) / 60.0
+            spike_index = round(hr_spikes / dur_hours, 1) if dur_hours > 0 else 0.0
+
+            row["breathing_analysis"] = {
+                "odi": odi_dict.get("spo2_odi"),
+                "score": int(round(odi_dict["spo2_night_score"])) if "spo2_night_score" in odi_dict else None,
+                "events": int(round(odi_dict["spo2_odi_events"])) if "spo2_odi_events" in odi_dict else None,
+                "measured_minutes": int(round(odi_dict["spo2_measured_minutes"])) if "spo2_measured_minutes" in odi_dict else None,
+                "hr_series": hr_series,
+                "hr_min": min(hr_values) if hr_values else None,
+                "hr_max": max(hr_values) if hr_values else None,
+                "hr_avg": round(sum(hr_values) / len(hr_values), 1) if hr_values else None,
+                "hr_spikes": hr_spikes,
+                "hr_spike_index": spike_index
+            }
         return row
 
     # --------------------------------------------------------------------------
