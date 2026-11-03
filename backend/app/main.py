@@ -2122,10 +2122,11 @@ async def handle_bridge_command(command: str, request: Request):
                 (st, et)
             )
 
-            # Analizar picos cardíacos nocturnos (arousals simpáticos >= 14 bpm en <= 2 min)
+            # Analizar picos cardíacos nocturnos (arousals simpáticos >= 8 bpm en <= 2 min)
             hr_series = []
             hr_values = []
             hr_spikes = 0
+            spike_events = []
             for i, h in enumerate(hr_rows):
                 v = int(round(h["value"])) if h.get("value") is not None else None
                 if v is not None:
@@ -2133,8 +2134,13 @@ async def handle_bridge_command(command: str, request: Request):
                     hr_series.append({"time": h["timestamp"], "hr": v})
                     if i > 0 and hr_rows[i-1].get("value") is not None:
                         diff = v - int(round(hr_rows[i-1]["value"]))
-                        if diff >= 14:
+                        if diff >= 8:
                             hr_spikes += 1
+                            spike_events.append({
+                                "time": h["timestamp"],
+                                "hr": v,
+                                "jump": diff
+                            })
 
             dur_hours = (row.get("duration_minutes") or 1) / 60.0
             spike_index = round(hr_spikes / dur_hours, 1) if dur_hours > 0 else 0.0
@@ -2149,7 +2155,8 @@ async def handle_bridge_command(command: str, request: Request):
                 "hr_max": max(hr_values) if hr_values else None,
                 "hr_avg": round(sum(hr_values) / len(hr_values), 1) if hr_values else None,
                 "hr_spikes": hr_spikes,
-                "hr_spike_index": spike_index
+                "hr_spike_index": spike_index,
+                "spike_events": spike_events
             }
         return row
 

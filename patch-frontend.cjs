@@ -1583,6 +1583,14 @@ const sleepHrChartOption = computed(() => {
   const times = seriesData.map((d: any) => formatTime(d.time));
   const hrs = seriesData.map((d: any) => d.hr);
 
+  const spikeTimes = new Set((breathing.value.spike_events || []).map((e: any) => formatTime(e.time)));
+  const spikeScatterData = seriesData
+    .map((d: any) => {
+      const t = formatTime(d.time);
+      return spikeTimes.has(t) ? [t, d.hr] : null;
+    })
+    .filter(Boolean);
+
   return {
     animation: false,
     grid: { left: 38, right: 16, top: 24, bottom: 24, containLabel: false },
@@ -1594,8 +1602,19 @@ const sleepHrChartOption = computed(() => {
       borderWidth: 1,
       textStyle: { color: palette.tooltipText, fontSize: 13 },
       formatter: (params: any) => {
-        const p = params[0];
-        return p ? \`\${p.name}<br/><strong>\${p.value} ppm</strong>\` : '';
+        let res = '';
+        let isSpike = false;
+        for (const p of params) {
+          if (p.seriesName === 'Aceleración Cardíaca') {
+            isSpike = true;
+          } else if (p.seriesName === 'Frecuencia Cardíaca') {
+            res = \`\${p.name}<br/><strong>\${p.value} ppm</strong>\`;
+          }
+        }
+        if (isSpike) {
+          res += '<br/><span style="color:#ef4444;font-weight:600;">⚠️ Evento / Aceleración (≥8 ppm)</span>';
+        }
+        return res;
       }
     },
     xAxis: {
@@ -1630,6 +1649,15 @@ const sleepHrChartOption = computed(() => {
             ]
           }
         }
+      },
+      {
+        name: 'Aceleración Cardíaca',
+        type: 'scatter',
+        symbol: 'circle',
+        symbolSize: 8,
+        itemStyle: { color: '#ef4444', borderWidth: 2, borderColor: '#fff' },
+        data: spikeScatterData,
+        z: 10
       }
     ]
   };
@@ -1672,11 +1700,11 @@ const weeklyChartOption = computed(() => {`;
           <div class="apnea-stat-item">
             <span class="stat-label">Aceleraciones FC</span>
             <strong class="stat-value">{{ (breathing.hr_spikes !== null && breathing.hr_spikes !== undefined) ? breathing.hr_spikes : '0' }} <small>(~{{ breathing.hr_spike_index }}/h)</small></strong>
-            <span class="stat-desc">Saltos súbitos ≥14 ppm en reposo</span>
+            <span class="stat-desc">Saltos súbitos ≥8 ppm en reposo</span>
           </div>
         </div>
 
-        <!-- Gráfica continua de pulso durante el sueño -->
+        <!-- Gráfica continua de pulso durante el sueño y eventos -->
         <div v-if="sleepHrChartOption" class="apnea-chart-box">
           <div class="chart-header">
             <span class="chart-title">Curva de Frecuencia Cardíaca durante el Sueño</span>
@@ -1685,6 +1713,22 @@ const weeklyChartOption = computed(() => {`;
             </span>
           </div>
           <VChart class="sleep-hr-chart" :key="CHART_THEME" :theme="CHART_THEME" :option="sleepHrChartOption" autoresize role="img" aria-label="Curva FC sueño" />
+
+          <!-- Leyendas explicativas debajo de la gráfica -->
+          <div class="apnea-chart-legend">
+            <div class="legend-row">
+              <span class="legend-dot dot-cyan"></span>
+              <span class="legend-text"><strong>Curva Continua de Pulso:</strong> Muestra la estabilidad parasimpática y las variaciones de FC minuto a minuto mientras duermes.</span>
+            </div>
+            <div class="legend-row">
+              <span class="legend-dot dot-red"></span>
+              <span class="legend-text"><strong>Aceleración Reactiva (Puntos Rojos):</strong> Indican saltos bruscos de pulso (≥8 ppm en 1 min), característicos de microdespertares o arousals tras un descenso respiratorio.</span>
+            </div>
+            <div v-if="breathing.events" class="legend-row">
+              <span class="legend-dot dot-orange"></span>
+              <span class="legend-text"><strong>Eventos Totales O₂ ({{ breathing.events }} en la noche):</strong> Caídas puntuales de saturación calculadas por el algoritmo SomnusCare de Zepp.</span>
+            </div>
+          </div>
         </div>
         <div v-else-if="breathing && breathing.odi === null" class="apnea-notice-empty">
           <span>ℹ️ Las métricas de oxígeno (ODI) para esta noche aún no han sido procesadas o sincronizadas por Zepp.</span>
@@ -1731,6 +1775,39 @@ if (fs.existsSync(sleepDetailCssPath)) {
 .chart-legend-span { color: var(--muted); }
 .chart-legend-span strong { color: #06b6d4; font-weight: 600; }
 .sleep-hr-chart { width: 100%; height: 180px; }
+.apnea-chart-legend {
+  display: grid;
+  gap: 6px;
+  padding: 10px 14px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  font-size: 12px;
+}
+.legend-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+.legend-dot.dot-cyan { background: #06b6d4; }
+.legend-dot.dot-red { background: #ef4444; border: 2px solid #fff; }
+.legend-dot.dot-orange { background: #f97316; }
+.legend-text { color: var(--muted); }
+.legend-text strong { color: var(--ink); }
+.apnea-notice-empty {
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  background: rgba(234, 179, 8, 0.08);
+  border: 1px dashed rgba(234, 179, 8, 0.3);
+  font-size: 13px;
+  color: var(--muted);
+}
 `;
     fs.writeFileSync(sleepDetailCssPath, sdCss, 'utf8');
     console.log('[Patch] Estilos de apnea agregados en SleepDetail.css');
