@@ -1684,7 +1684,10 @@ const weeklyChartOption = computed(() => {`;
               Mín: <strong>{{ breathing.hr_min || '—' }}</strong> · Prom: <strong>{{ breathing.hr_avg || '—' }}</strong> · Máx: <strong>{{ breathing.hr_max || '—' }} ppm</strong>
             </span>
           </div>
-          <VChart class="sleep-hr-chart" :theme="CHART_THEME" :option="sleepHrChartOption" autoresize role="img" aria-label="Curva FC sueño" />
+          <VChart class="sleep-hr-chart" :key="CHART_THEME" :theme="CHART_THEME" :option="sleepHrChartOption" autoresize role="img" aria-label="Curva FC sueño" />
+        </div>
+        <div v-else-if="breathing && breathing.odi === null" class="apnea-notice-empty">
+          <span>ℹ️ Las métricas de oxígeno (ODI) para esta noche aún no han sido procesadas o sincronizadas por Zepp.</span>
         </div>
       </section>
 
