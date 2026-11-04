@@ -7,8 +7,10 @@ import hmac
 import struct
 import base64
 import urllib.parse
+import threading
 from pathlib import Path
 from typing import Dict, Any, Optional, Tuple
+from fastapi import Request
 from fastapi.responses import HTMLResponse
 
 try:
@@ -25,43 +27,77 @@ except ImportError:
 DATA_DIR = Path(os.getenv("ZEPPBRIDGE_DATA_DIR", "/data"))
 AUTH_SECURITY_FILE = DATA_DIR / "auth_security.json"
 
+# Lock para operaciones seguras concurrentes en disco y memoria
+_SECURITY_LOCK = threading.Lock()
+_CACHED_CONFIG: Optional[Dict[str, Any]] = None
+
 # Almacenes temporales en memoria para flujos pendientes y control de fuerza bruta
 PENDING_SETUPS: Dict[str, Dict[str, Any]] = {}
 PENDING_LOGINS: Dict[str, Dict[str, Any]] = {}
-FAILED_ATTEMPTS: Dict[str, list] = {}  # ip -> list of timestamps
+FAILED_IP_ATTEMPTS: Dict[str, list] = {}       # ip -> list of timestamps
+FAILED_ACCOUNT_ATTEMPTS: Dict[str, list] = {}  # email -> list of timestamps
+USED_TOTP_CODES: Dict[str, float] = {}          # "secret:code" -> timestamp (Prevención Replay RFC 6238)
 
 # ------------------------------------------------------------------------------
-# 1. Carga y Guardado de Configuración de Seguridad
+# 1. Carga y Guardado de Configuración de Seguridad (Thread-Safe & Fail-Secure)
 # ------------------------------------------------------------------------------
 def load_security_config() -> Dict[str, Any]:
-    if AUTH_SECURITY_FILE.exists():
-        try:
-            with open(AUTH_SECURITY_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                if isinstance(data, dict):
-                    if "sessions" not in data or not isinstance(data["sessions"], dict):
-                        data["sessions"] = {}
-                    return data
-        except Exception:
-            pass
-    return {
-        "initialized": False,
-        "email": "",
-        "password_hash": "",
-        "totp_secret": "",
-        "sessions": {}
-    }
+    global _CACHED_CONFIG
+    with _SECURITY_LOCK:
+        if AUTH_SECURITY_FILE.exists():
+            try:
+                with open(AUTH_SECURITY_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if isinstance(data, dict):
+                        if "sessions" not in data or not isinstance(data["sessions"], dict):
+                            data["sessions"] = {}
+                        _CACHED_CONFIG = data
+                        return data
+            except Exception as e:
+                # Si el archivo existe pero hubo un error de I/O momentáneo,
+                # NUNCA fallar abierto (fail-secure). Devolver la caché si existe.
+                print(f"[Security] Advertencia leyendo {AUTH_SECURITY_FILE}: {e}")
+                if _CACHED_CONFIG is not None:
+                    return _CACHED_CONFIG
+                return {
+                    "initialized": True,  # Fail-secure: no permitir setup-credentials accidental
+                    "email": "",
+                    "password_hash": "",
+                    "totp_secret": "",
+                    "sessions": {}
+                }
+        return {
+            "initialized": False,
+            "email": "",
+            "password_hash": "",
+            "totp_secret": "",
+            "sessions": {}
+        }
 
 def save_security_config(cfg: Dict[str, Any]) -> None:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    temp_file = DATA_DIR / "auth_security.tmp"
-    with open(temp_file, "w", encoding="utf-8") as f:
-        json.dump(cfg, f, indent=2)
-    temp_file.replace(AUTH_SECURITY_FILE)
-    try:
-        os.chmod(AUTH_SECURITY_FILE, 0o600)
-    except Exception:
-        pass
+    global _CACHED_CONFIG
+    with _SECURITY_LOCK:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        # Escritura atómica usando un archivo temporal único por hilo/petición
+        unique_suffix = secrets.token_hex(6)
+        temp_file = DATA_DIR / f"auth_security_{unique_suffix}.tmp"
+        try:
+            with open(temp_file, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            temp_file.replace(AUTH_SECURITY_FILE)
+            try:
+                os.chmod(AUTH_SECURITY_FILE, 0o600)
+            except Exception:
+                pass
+            _CACHED_CONFIG = cfg
+        finally:
+            if temp_file.exists():
+                try:
+                    temp_file.unlink()
+                except Exception:
+                    pass
 
 def is_security_initialized() -> bool:
     cfg = load_security_config()
@@ -88,7 +124,7 @@ def verify_password(password: str, stored_hash: str) -> bool:
         return False
 
 # ------------------------------------------------------------------------------
-# 3. Autenticación de Doble Factor (TOTP - RFC 6238)
+# 3. Autenticación de Doble Factor (TOTP - RFC 6238 con Replay Protection)
 # ------------------------------------------------------------------------------
 def generate_totp_secret() -> str:
     if pyotp:
@@ -125,39 +161,122 @@ def verify_totp(secret: str, code: str, window: int = 1) -> bool:
     clean_code = str(code).strip().replace(" ", "").replace("-", "")
     if len(clean_code) != 6 or not clean_code.isdigit():
         return False
+
+    now = time.time()
+    # Limpiar códigos usados con más de 180 segundos (fuera de toda ventana posible)
+    expired_keys = [k for k, t in USED_TOTP_CODES.items() if now - t > 180]
+    for k in expired_keys:
+        USED_TOTP_CODES.pop(k, None)
+
+    # Protección contra ataques de repetición (Replay Attack - RFC 6238 Sección 5.2)
+    totp_replay_key = f"{secret}:{clean_code}"
+    if totp_replay_key in USED_TOTP_CODES:
+        print(f"[Security] Intento de reutilización de código TOTP detectado y bloqueado.")
+        return False
+
+    valid = False
     if pyotp:
         try:
             totp = pyotp.TOTP(secret)
-            return bool(totp.verify(clean_code, valid_window=window))
+            valid = bool(totp.verify(clean_code, valid_window=window))
         except Exception:
-            pass
-    # Implementación pura en caso de no estar disponible pyotp
-    try:
-        key = base64.b32decode(secret, True)
-        curr_counter = int(time.time() / 30)
-        for offset in range(-window, window + 1):
-            msg = struct.pack(">Q", curr_counter + offset)
-            h = hmac.new(key, msg, hashlib.sha1).digest()
-            o = h[19] & 15
-            calc_code = (struct.unpack(">I", h[o:o+4])[0] & 0x7fffffff) % 1_000_000
-            if f"{calc_code:06d}" == clean_code:
-                return True
-        return False
-    except Exception:
-        return False
+            valid = False
+
+    if not valid:
+        # Implementación pura en caso de fallo o ausencia de pyotp
+        try:
+            key = base64.b32decode(secret, True)
+            curr_counter = int(time.time() / 30)
+            for offset in range(-window, window + 1):
+                msg = struct.pack(">Q", curr_counter + offset)
+                h = hmac.new(key, msg, hashlib.sha1).digest()
+                o = h[19] & 15
+                calc_code = (struct.unpack(">I", h[o:o+4])[0] & 0x7fffffff) % 1_000_000
+                if f"{calc_code:06d}" == clean_code:
+                    valid = True
+                    break
+        except Exception:
+            valid = False
+
+    if valid:
+        # Registrar el código como consumido
+        USED_TOTP_CODES[totp_replay_key] = now
+        return True
+
+    return False
 
 # ------------------------------------------------------------------------------
-# 4. Gestión de Sesiones y Protección contra Fuerza Bruta
+# 4. Gestión de Sesiones y Protección contra Fuerza Bruta de Nivel Empresarial
 # ------------------------------------------------------------------------------
+def get_client_ip(request: Request) -> str:
+    """Extrae la IP real del cliente considerando Reverse Proxies seguros (Cloudflare, Nginx, NPM, Caddy, Traefik)."""
+    # 1. Cloudflare header
+    cf_ip = request.headers.get("cf-connecting-ip")
+    if cf_ip and len(cf_ip) <= 45:
+        return cf_ip.strip()
+
+    # 2. X-Real-IP
+    real_ip = request.headers.get("x-real-ip")
+    if real_ip and len(real_ip) <= 45:
+        return real_ip.strip()
+
+    # 3. X-Forwarded-For (tomar la primera IP de la cadena)
+    xff = request.headers.get("x-forwarded-for")
+    if xff:
+        parts = [p.strip() for p in xff.split(",") if p.strip()]
+        if parts and len(parts[0]) <= 45:
+            return parts[0]
+
+    # 4. Fallback directo a socket client
+    if request.client and request.client.host:
+        return request.client.host
+    return "unknown"
+
+def check_rate_limit(ip: str, email: str = "") -> bool:
+    """Valida límites por IP (máx 5 fallos en 5 min) y por cuenta/email (máx 10 fallos en 15 min)."""
+    now = time.time()
+    # 1. Chequeo por IP
+    ip_attempts = [t for t in FAILED_IP_ATTEMPTS.get(ip, []) if now - t < 300]
+    FAILED_IP_ATTEMPTS[ip] = ip_attempts
+    if len(ip_attempts) >= 5:
+        return False
+
+    # 2. Chequeo por cuenta/email si se proporciona (protección contra botnets distribuidas)
+    if email:
+        clean_email = email.strip().lower()
+        acc_attempts = [t for t in FAILED_ACCOUNT_ATTEMPTS.get(clean_email, []) if now - t < 900]
+        FAILED_ACCOUNT_ATTEMPTS[clean_email] = acc_attempts
+        if len(acc_attempts) >= 10:
+            return False
+
+    return True
+
+def record_failed_attempt(ip: str, email: str = "") -> None:
+    now = time.time()
+    # Registrar en IP
+    ip_attempts = [t for t in FAILED_IP_ATTEMPTS.get(ip, []) if now - t < 300]
+    ip_attempts.append(now)
+    FAILED_IP_ATTEMPTS[ip] = ip_attempts
+
+    # Registrar en cuenta
+    if email:
+        clean_email = email.strip().lower()
+        acc_attempts = [t for t in FAILED_ACCOUNT_ATTEMPTS.get(clean_email, []) if now - t < 900]
+        acc_attempts.append(now)
+        FAILED_ACCOUNT_ATTEMPTS[clean_email] = acc_attempts
+
+def reset_failed_attempts(ip: str, email: str = "") -> None:
+    FAILED_IP_ATTEMPTS.pop(ip, None)
+    if email:
+        FAILED_ACCOUNT_ATTEMPTS.pop(email.strip().lower(), None)
+
 def create_session(email: str, remember: bool = True, user_agent: str = "") -> str:
     cfg = load_security_config()
     token = secrets.token_urlsafe(32)
     now = int(time.time())
-    # 30 días si es recordado, 24 horas si no
     duration = 30 * 86400 if remember else 86400
     expires_at = now + duration
 
-    # Limpiar sesiones expiradas
     valid_sessions = {}
     for tok, sess in cfg.get("sessions", {}).items():
         if isinstance(sess, dict) and sess.get("expires_at", 0) > now:
@@ -183,7 +302,6 @@ def verify_session(token: Optional[str]) -> Optional[Dict[str, Any]]:
         return None
     now = int(time.time())
     if sess.get("expires_at", 0) < now:
-        # Expirada
         del sessions[token]
         save_security_config(cfg)
         return None
@@ -196,23 +314,6 @@ def revoke_session(token: Optional[str]) -> None:
     if "sessions" in cfg and token in cfg["sessions"]:
         del cfg["sessions"][token]
         save_security_config(cfg)
-
-def check_rate_limit(ip: str) -> bool:
-    """Retorna True si la IP puede intentar loguearse; False si excede 5 fallos en 3 minutos."""
-    now = time.time()
-    attempts = [t for t in FAILED_ATTEMPTS.get(ip, []) if now - t < 180]
-    FAILED_ATTEMPTS[ip] = attempts
-    return len(attempts) < 5
-
-def record_failed_attempt(ip: str) -> None:
-    now = time.time()
-    attempts = [t for t in FAILED_ATTEMPTS.get(ip, []) if now - t < 180]
-    attempts.append(now)
-    FAILED_ATTEMPTS[ip] = attempts
-
-def reset_failed_attempts(ip: str) -> None:
-    if ip in FAILED_ATTEMPTS:
-        del FAILED_ATTEMPTS[ip]
 
 # ------------------------------------------------------------------------------
 # 5. Plantilla HTML Única y Responsiva: ZeppBridge Shield (Login y Setup)

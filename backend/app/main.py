@@ -5,6 +5,8 @@ import json
 import sqlite3
 import ssl
 import asyncio
+import posixpath
+import urllib.parse
 import urllib.request
 import urllib.error
 import subprocess
@@ -42,13 +44,32 @@ app.add_middleware(
     minimum_size=1000
 )
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# ------------------------------------------------------------------------------
+# Cabeceras de Seguridad Estrictas de Nivel Empresarial (OWASP / CIS Benchmarks)
+# ------------------------------------------------------------------------------
+@app.middleware("http")
+async def enterprise_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=(), payment=()"
+    if request.url.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+    return response
+
+# CORS restringido: únicamente habilitado si se configuran orígenes explícitos
+_allowed_origins_env = os.getenv("ZEPPBRIDGE_ALLOWED_ORIGINS", "")
+if _allowed_origins_env.strip():
+    _origins = [o.strip() for o in _allowed_origins_env.split(",") if o.strip()]
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_origins,
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        allow_headers=["*"],
+    )
 
 # ------------------------------------------------------------------------------
 # Sistema de Seguridad ZeppBridge Shield (Autenticación y 2FA TOTP)
@@ -67,6 +88,7 @@ from .security import (
     create_session,
     verify_session,
     revoke_session,
+    get_client_ip,
     check_rate_limit,
     record_failed_attempt,
     reset_failed_attempts,
@@ -75,21 +97,32 @@ from .security import (
     PENDING_LOGINS
 )
 
+PUBLIC_EXEMPT_PATHS = {
+    "/api/auth/status",
+    "/api/auth/setup-credentials",
+    "/api/auth/verify-setup",
+    "/api/auth/login-credentials",
+    "/api/auth/verify-login-2fa",
+    "/api/auth/logout",
+    "/health",
+    "/favicon.ico",
+    "/apple-touch-icon.png",
+    "/robots.txt",
+}
+
 @app.middleware("http")
 async def auth_security_gate(request: Request, call_next):
-    path = request.url.path
+    # Normalización canónica estricta para evitar bypass por path traversal / encoding
+    raw_path = request.url.path.split("?")[0]
+    clean_path = posixpath.normpath(urllib.parse.unquote(raw_path))
 
-    # Endpoints y recursos públicos exentos
-    if (
-        path.startswith("/api/auth/")
-        or path == "/health"
-        or path in ("/favicon.ico", "/apple-touch-icon.png", "/robots.txt")
-    ):
+    # Endpoints y recursos públicos estrictamente permitidos
+    if clean_path in PUBLIC_EXEMPT_PATHS:
         return await call_next(request)
 
     # 1. Si aún no está configurado (primer acceso del usuario)
     if not is_security_initialized():
-        if path.startswith("/api/"):
+        if clean_path.startswith("/api/"):
             return JSONResponse({"error": "setup_required", "message": "Se requiere configuración inicial de seguridad"}, status_code=403)
         return render_auth_page(mode="setup")
 
@@ -98,7 +131,7 @@ async def auth_security_gate(request: Request, call_next):
     sess = verify_session(token)
 
     if not sess:
-        if path.startswith("/api/"):
+        if clean_path.startswith("/api/"):
             return JSONResponse({"error": "unauthorized", "login_required": True, "message": "Sesión no válida o expirada"}, status_code=401)
         return render_auth_page(mode="login")
 
@@ -117,7 +150,8 @@ async def auth_status(request: Request):
         "ok": True,
         "initialized": init,
         "authenticated": bool(sess),
-        "email": sess["email"] if sess else (load_security_config().get("email") if init else None)
+        # Nunca revelar el email de administración a peticiones anónimas
+        "email": sess["email"] if sess else None
     }
 
 @app.post("/api/auth/setup-credentials")
@@ -190,15 +224,27 @@ async def auth_verify_setup(request: Request):
 
     session_token = create_session(pending["email"], remember=True, user_agent=request.headers.get("user-agent", ""))
 
+    is_https = (
+        request.url.scheme == "https"
+        or request.headers.get("x-forwarded-proto", "").lower() == "https"
+        or request.headers.get("x-forwarded-ssl", "").lower() == "on"
+    )
+
     res = JSONResponse({"ok": True, "token": session_token})
-    res.set_cookie(key="zb_session", value=session_token, max_age=30*86400, httponly=True, samesite="lax", path="/")
+    res.set_cookie(
+        key="zb_session",
+        value=session_token,
+        max_age=30*86400,
+        httponly=True,
+        secure=is_https,
+        samesite="lax",
+        path="/"
+    )
     return res
 
 @app.post("/api/auth/login-credentials")
 async def auth_login_credentials(request: Request):
-    client_ip = request.client.host if request.client else "unknown"
-    if not check_rate_limit(client_ip):
-        return JSONResponse({"ok": False, "message": "Demasiados intentos fallidos. Espera 3 minutos."}, status_code=429)
+    client_ip = get_client_ip(request)
 
     if not is_security_initialized():
         return JSONResponse({"ok": False, "message": "Configuración requerida"}, status_code=400)
@@ -211,11 +257,15 @@ async def auth_login_credentials(request: Request):
     email = str(body.get("email") or "").strip().lower()
     password = str(body.get("password") or "")
 
+    # Control de fuerza bruta por IP y por cuenta
+    if not check_rate_limit(client_ip, email):
+        return JSONResponse({"ok": False, "message": "Demasiados intentos fallidos. Por seguridad, espera 5 minutos."}, status_code=429)
+
     cfg = load_security_config()
     cfg_email = str(cfg.get("email") or "").strip().lower()
 
     if email != cfg_email or not verify_password(password, cfg.get("password_hash", "")):
-        record_failed_attempt(client_ip)
+        record_failed_attempt(client_ip, email)
         return JSONResponse({"ok": False, "message": "Correo electrónico o contraseña incorrectos."}, status_code=401)
 
     temp_token = secrets.token_urlsafe(24)
@@ -228,9 +278,7 @@ async def auth_login_credentials(request: Request):
 
 @app.post("/api/auth/verify-login-2fa")
 async def auth_verify_login_2fa(request: Request):
-    client_ip = request.client.host if request.client else "unknown"
-    if not check_rate_limit(client_ip):
-        return JSONResponse({"ok": False, "message": "Demasiados intentos fallidos. Espera 3 minutos."}, status_code=429)
+    client_ip = get_client_ip(request)
 
     try:
         body = await request.json()
@@ -245,19 +293,37 @@ async def auth_verify_login_2fa(request: Request):
     if not pending or pending["expires"] < time.time():
         return JSONResponse({"ok": False, "message": "El código temporal ha expirado. Introduce de nuevo tu contraseña."}, status_code=400)
 
+    pending_email = pending.get("email", "")
+    if not check_rate_limit(client_ip, pending_email):
+        return JSONResponse({"ok": False, "message": "Demasiados intentos fallidos. Por seguridad, espera 5 minutos."}, status_code=429)
+
     cfg = load_security_config()
     if not verify_totp(cfg.get("totp_secret", ""), code):
-        record_failed_attempt(client_ip)
+        record_failed_attempt(client_ip, pending_email)
         return JSONResponse({"ok": False, "message": "Código de autenticación 2FA incorrecto o caducado."}, status_code=401)
 
-    reset_failed_attempts(client_ip)
+    reset_failed_attempts(client_ip, pending_email)
     del PENDING_LOGINS[temp_token]
 
     session_token = create_session(cfg["email"], remember=remember, user_agent=request.headers.get("user-agent", ""))
     max_age = 30 * 86400 if remember else None
 
+    is_https = (
+        request.url.scheme == "https"
+        or request.headers.get("x-forwarded-proto", "").lower() == "https"
+        or request.headers.get("x-forwarded-ssl", "").lower() == "on"
+    )
+
     res = JSONResponse({"ok": True, "token": session_token})
-    res.set_cookie(key="zb_session", value=session_token, max_age=max_age, httponly=True, samesite="lax", path="/")
+    res.set_cookie(
+        key="zb_session",
+        value=session_token,
+        max_age=max_age,
+        httponly=True,
+        secure=is_https,
+        samesite="lax",
+        path="/"
+    )
     return res
 
 @app.post("/api/auth/logout")
@@ -345,8 +411,15 @@ if not CATALOG_PATH.exists():
 DEVICE_CATALOG: Dict[Any, Dict[str, Any]] = {}
 if CATALOG_PATH.exists():
     try:
-        with open(CATALOG_PATH, "r", encoding="utf-8") as f:
-            cat_data = json.load(f)
+        cat_data = {}
+        for enc in ("utf-8", "utf-8-sig", "utf-16", "utf-16-le"):
+            try:
+                with open(CATALOG_PATH, "r", encoding=enc) as f:
+                    cat_data = json.load(f)
+                    break
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                continue
+        if cat_data:
             for dev in cat_data.get("devices", []):
                 for code in dev.get("device_source_codes", []):
                     DEVICE_CATALOG[code] = dev
@@ -356,7 +429,7 @@ if CATALOG_PATH.exists():
                     DEVICE_CATALOG[dev["canonical_name"].lower()] = dev
                 if "catalog_id" in dev:
                     DEVICE_CATALOG[dev["catalog_id"].lower()] = dev
-        print(f"[Catalog] Cargados {len(cat_data.get('devices', []))} dispositivos oficiales desde {CATALOG_PATH}")
+            print(f"[Catalog] Cargados {len(cat_data.get('devices', []))} dispositivos oficiales desde {CATALOG_PATH}")
     except Exception as e:
         print(f"[Catalog] Error cargando catalog.json: {e}")
 
@@ -4937,7 +5010,14 @@ async def handle_bridge_command(command: str, request: Request):
             "training_plan_drafts", "training_plan_workouts", "training_plan_publishes",
             "data_letters", "import_batches", "workout_imports", "workout_fit_overrides"
         ]
-        target_path = body.get("path") or str(DATA_DIR / f"my_records_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.json")
+        raw_path = body.get("path")
+        if raw_path:
+            # Prevenir path traversal asegurando que siempre se guarde dentro de DATA_DIR
+            clean_name = Path(raw_path).name
+            p = DATA_DIR / clean_name
+        else:
+            p = DATA_DIR / f"my_records_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.json"
+
         data = {
             "schema_version": 1,
             "exported_at": datetime.utcnow().isoformat() + "Z",
@@ -4960,11 +5040,10 @@ async def handle_bridge_command(command: str, request: Request):
                 conn.close()
 
         try:
-            p = Path(target_path)
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         except Exception as e:
-            print(f"[ExportMyRecords] Error writing file {target_path}: {e}")
+            print(f"[ExportMyRecords] Error writing file {p}: {e}")
 
         return total_records
 
@@ -6184,11 +6263,26 @@ async def backup_db_endpoint():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al generar copia de seguridad: {e}")
 
+MAX_DB_UPLOAD_BYTES = 100 * 1024 * 1024  # 100 MB máximo
+
 @app.post("/api/bridge/restore_db")
 async def restore_db_endpoint(file: UploadFile = File(...)):
-    """Restaura la base de datos a partir de un archivo .db subido por el usuario."""
+    """Restaura la base de datos a partir de un archivo .db subido por el usuario con validación de tamaño e integridad."""
     try:
-        content = await file.read()
+        # Prevenir agotamiento de memoria (DoS) leyendo por chunks con límite estricto
+        chunk_size = 1024 * 1024  # 1 MB
+        total_size = 0
+        chunks = []
+        while True:
+            chunk = await file.read(chunk_size)
+            if not chunk:
+                break
+            total_size += len(chunk)
+            if total_size > MAX_DB_UPLOAD_BYTES:
+                return JSONResponse({"ok": False, "message": "El archivo excede el tamaño máximo permitido (100 MB)."}, status_code=413)
+            chunks.append(chunk)
+
+        content = b"".join(chunks)
         if len(content) < 100 or not content.startswith(b"SQLite format 3\x00"):
             return JSONResponse({"ok": False, "message": "El archivo proporcionado no es una base de datos SQLite válida."}, status_code=400)
 
@@ -6222,7 +6316,7 @@ async def test_morning_report_endpoint():
         return JSONResponse({"ok": False, "message": str(e)}, status_code=400)
 
 # ==============================================================================
-# Servir el Frontend oficial de ZeppBridge (carpeta static/)
+# Servir el Frontend oficial de ZeppBridge (carpeta static/) con Anti-Path-Traversal
 # ==============================================================================
 @app.get("/health")
 def health():
@@ -6237,9 +6331,14 @@ async def serve_root():
 
 @app.get("/{full_path:path}")
 async def serve_spa_path(full_path: str):
-    file_path = STATIC_DIR / full_path
-    if file_path.exists() and file_path.is_file():
-        return FileResponse(file_path)
+    try:
+        clean_path = posixpath.normpath(urllib.parse.unquote(full_path)).lstrip("/")
+        file_path = (STATIC_DIR / clean_path).resolve()
+        # Verificación estricta de Path Traversal: el archivo resuelto debe permanecer dentro de STATIC_DIR
+        if file_path.is_relative_to(STATIC_DIR.resolve()) and file_path.is_file():
+            return FileResponse(file_path)
+    except Exception:
+        pass
     index_file = STATIC_DIR / "index.html"
     if index_file.exists():
         return FileResponse(index_file)
