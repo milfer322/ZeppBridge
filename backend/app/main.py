@@ -139,7 +139,7 @@ async def auth_setup_credentials(request: Request):
 
     secret = generate_totp_secret()
     uri = get_totp_uri(email, secret)
-    svg = generate_qr_svg(uri)
+    qr_data = generate_qr_svg(uri)
     pending_token = secrets.token_urlsafe(24)
 
     PENDING_SETUPS[pending_token] = {
@@ -154,7 +154,8 @@ async def auth_setup_credentials(request: Request):
         "pending_token": pending_token,
         "totp_secret": secret,
         "totp_uri": uri,
-        "qr_svg": svg
+        "qr_data_uri": qr_data,
+        "qr_svg": qr_data
     }
 
 @app.post("/api/auth/verify-setup")

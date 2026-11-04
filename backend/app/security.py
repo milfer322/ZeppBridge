@@ -97,20 +97,29 @@ def generate_totp_secret() -> str:
     return base64.b32encode(raw).decode("ascii").rstrip("=")
 
 def get_totp_uri(email: str, secret: str, issuer: str = "ZeppBridge") -> str:
+    clean_email = email.strip()
     if pyotp:
-        return pyotp.totp.TOTP(secret).provisioning_uri(name=email, issuer_name=issuer)
-    label = urllib.parse.quote(f"{issuer}:{email}")
-    issuer_q = urllib.parse.quote(issuer)
-    return f"otpauth://totp/{label}?secret={secret}&issuer={issuer_q}&algorithm=SHA1&digits=6&period=30"
+        return pyotp.totp.TOTP(secret).provisioning_uri(name=clean_email, issuer_name=issuer)
+    clean_issuer = urllib.parse.quote(issuer)
+    encoded_email = urllib.parse.quote(clean_email)
+    return f"otpauth://totp/{clean_issuer}:{encoded_email}?secret={secret}&issuer={clean_issuer}"
 
-def generate_qr_svg(uri: str) -> str:
+def generate_qr_data_uri(uri: str) -> str:
     if segno:
         try:
-            qr = segno.make_qr(uri)
-            return qr.svg_inline(scale=5, border=2)
+            # error='m' proporciona redundancia del 15% para lectura instantánea
+            qr = segno.make_qr(uri, error="m")
+            try:
+                # scale=8 y border=4 (estándar ISO/IEC 18004 con margen de 4 módulos en PNG nítido)
+                return qr.png_data_uri(scale=8, border=4)
+            except Exception:
+                return qr.svg_data_uri(scale=8, border=4)
         except Exception:
             pass
     return ""
+
+def generate_qr_svg(uri: str) -> str:
+    return generate_qr_data_uri(uri)
 
 def verify_totp(secret: str, code: str, window: int = 1) -> bool:
     clean_code = str(code).strip().replace(" ", "").replace("-", "")
@@ -447,34 +456,65 @@ def render_auth_page(mode: str = "login", initial_message: str = "") -> HTMLResp
       border: 1px solid var(--card-border);
       border-radius: var(--radius-md);
     }}
-    .qr-svg-holder {{
+    .qr-img-holder {{
       background: #ffffff;
-      padding: 12px;
-      border-radius: 12px;
-      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+      padding: 16px;
+      border-radius: 16px;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.45);
       display: flex;
       align-items: center;
       justify-content: center;
     }}
-    .qr-svg-holder svg {{
+    .qr-img {{
       display: block;
-      max-width: 190px;
-      max-height: 190px;
-      width: 100%;
-      height: auto;
+      width: 230px;
+      height: 230px;
+      max-width: 100%;
+      image-rendering: pixelated;
+      image-rendering: crisp-edges;
+    }}
+    .btn-open-app {{
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 9px 14px;
+      background: rgba(6, 182, 212, 0.15);
+      color: var(--cyan);
+      border: 1px solid rgba(6, 182, 212, 0.35);
+      border-radius: 8px;
+      text-decoration: none;
+      font-size: 13px;
+      font-weight: 600;
+      transition: all 0.2s;
+    }}
+    .btn-open-app:hover {{
+      background: rgba(6, 182, 212, 0.25);
     }}
     .secret-key-badge {{
       display: flex;
       align-items: center;
       justify-content: space-between;
+      gap: 10px;
       width: 100%;
-      background: rgba(0, 0, 0, 0.3);
-      padding: 8px 12px;
-      border-radius: 8px;
+      background: rgba(0, 0, 0, 0.35);
+      padding: 10px 14px;
+      border-radius: 10px;
       border: 1px dashed rgba(255, 255, 255, 0.15);
+    }}
+    .secret-label {{
+      font-size: 11px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }}
+    .secret-text {{
       font-family: monospace;
-      font-size: 13px;
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: 1.5px;
       color: var(--cyan);
+      word-break: break-all;
     }}
     .btn-copy {{
       background: rgba(255, 255, 255, 0.1);
@@ -583,13 +623,24 @@ def render_auth_page(mode: str = "login", initial_message: str = "") -> HTMLResp
     <form id="form-2fa" style="display: none;" onsubmit="handle2faSubmit(event)">
       <!-- Vista previa QR (solo en setup) -->
       <div id="qr-container" class="qr-box" style="display: none;">
-        <span style="font-size: 13px; font-weight: 600; color: #fff;">1. Escanea este código con tu app Authenticator</span>
-        <div id="qr-svg-holder" class="qr-svg-holder"></div>
-        <div class="secret-key-badge">
-          <span id="secret-key-text">CLAVE-SECRETA</span>
-          <button type="button" class="btn-copy" onclick="copySecretKey()">Copiar</button>
+        <span style="font-size: 13.5px; font-weight: 600; color: #fff; text-align: center;">1. Escanea este código con tu app Authenticator</span>
+        
+        <div class="qr-img-holder">
+          <img id="qr-img" class="qr-img" src="" alt="Código QR 2FA para Authenticator">
         </div>
-        <span style="font-size: 11.5px; color: var(--text-muted);">Compatible con Google Authenticator, Authy, Apple Passwords y 1Password.</span>
+
+        <a id="btn-open-authenticator" class="btn-open-app" href="#" target="_blank" rel="noopener">
+          📲 Abrir directamente en Authenticator (Móvil)
+        </a>
+
+        <div class="secret-key-badge">
+          <div style="display: flex; flex-direction: column; gap: 3px; min-width: 0;">
+            <span class="secret-label">Clave manual (si no puedes escanear):</span>
+            <span id="secret-key-text" class="secret-text">CLAVE-SECRETA</span>
+          </div>
+          <button type="button" class="btn-copy" onclick="copySecretKey()">📋 Copiar</button>
+        </div>
+        <span style="font-size: 11.5px; color: var(--text-muted); text-align: center;">Compatible con Google Authenticator, Authy, Apple Passwords y 1Password.</span>
       </div>
 
       <div class="form-group">
@@ -635,11 +686,21 @@ def render_auth_page(mode: str = "login", initial_message: str = "") -> HTMLResp
     }}
 
     function copySecretKey() {{
-      const txt = document.getElementById('secret-key-text').innerText;
-      navigator.clipboard.writeText(txt).then(() => {{
-        showAlert('Clave secreta copiada al portapapeles', true);
+      const secret = pendingSecret || document.getElementById('secret-key-text').innerText.replace(/\\s+/g, '');
+      navigator.clipboard.writeText(secret).then(() => {{
+        showAlert('Clave copiada. Puedes pegarla en tu app Authenticator como ZeppBridge', true);
       }}).catch(() => {{
-        showAlert('No se pudo copiar automáticamente', false);
+        try {{
+          const ta = document.createElement('textarea');
+          ta.value = secret;
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand('copy');
+          document.body.removeChild(ta);
+          showAlert('Clave copiada al portapapeles', true);
+        }} catch (err) {{
+          showAlert('Selecciona y copia manualmente la clave de texto');
+        }}
       }});
     }}
 
@@ -703,8 +764,21 @@ def render_auth_page(mode: str = "login", initial_message: str = "") -> HTMLResp
 
           // Mostrar QR y clave
           document.getElementById('qr-container').style.display = 'flex';
-          document.getElementById('qr-svg-holder').innerHTML = data.qr_svg || '';
-          document.getElementById('secret-key-text').innerText = data.totp_secret;
+          const qrImg = document.getElementById('qr-img');
+          qrImg.src = data.qr_data_uri || data.qr_svg || '';
+
+          // Enlace directo para abrir la app de autenticación en móviles
+          const openLink = document.getElementById('btn-open-authenticator');
+          if (data.totp_uri) {{
+            openLink.href = data.totp_uri;
+            openLink.style.display = 'inline-flex';
+          }} else {{
+            openLink.style.display = 'none';
+          }}
+
+          // Formatear clave en bloques legibles de 4 caracteres
+          const formatted = (data.totp_secret || '').match(/.{1,4}/g)?.join(' ') || data.totp_secret;
+          document.getElementById('secret-key-text').innerText = formatted;
 
           // Cambiar a paso 2
           document.getElementById('form-credentials').style.display = 'none';
