@@ -440,13 +440,63 @@ const handleRestoreFile = async (e: Event) => {
   }
 };
 
+const authEmail = ref('');
+const loadAuthStatus = async () => {
+  try {
+    const res = await fetch('/api/auth/status');
+    const data = await res.json();
+    if (data && data.email) {
+      authEmail.value = data.email;
+    }
+  } catch (e) {}
+};
+
+const handleLogout = async () => {
+  if (confirm('¿Estás seguro de que deseas cerrar sesión? Necesitarás tu contraseña y el código 2FA para volver a entrar.')) {
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' });
+    } catch (e) {}
+    window.location.reload();
+  }
+};
+
 onMounted(() => {
   loadData();
+  loadAuthStatus();
 });
 </script>
 
 <template>
   <div class="custom-section">
+    <!-- SECCIÓN SEGURIDAD Y DOBLE FACTOR (2FA) -->
+    <section class="s-section">
+      <div class="s-section-head">
+        <h3>🛡️ Seguridad y Control de Acceso (2FA)</h3>
+        <p class="s-row-sub" style="margin: 2px 0 0 0;">Tus datos de salud y entrenamientos están blindados con autenticación de doble factor (TOTP).</p>
+      </div>
+      <div class="s-list">
+        <div class="s-row">
+          <div class="s-row-text">
+            <span class="s-row-title">Estado de la Protección</span>
+            <span class="s-row-sub">Factor de Doble Seguridad (TOTP) activo · Nadie en la red local puede acceder sin tu móvil</span>
+          </div>
+          <span style="background: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.35); font-weight: 600; padding: 4px 10px; border-radius: 999px; font-size: 12px; display: inline-flex; align-items: center; gap: 4px;">
+            🔒 Activo y Protegido
+          </span>
+        </div>
+
+        <div class="s-row" v-if="authEmail">
+          <div class="s-row-text">
+            <span class="s-row-title">Usuario Administrador</span>
+            <span class="s-row-sub">{{ authEmail }}</span>
+          </div>
+          <button class="pill-button" type="button" @click="handleLogout" style="background: rgba(239, 68, 68, 0.15); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.35); font-size: 12px; font-weight: 600;">
+            🚪 Cerrar Sesión
+          </button>
+        </div>
+      </div>
+    </section>
+
     <!-- SECCIÓN DEPORTES Y PLANIFICADOR DE ENTRENAMIENTOS -->
     <section class="s-section">
       <div class="s-section-head">

@@ -16,6 +16,8 @@ data/*
 *.sqlite3
 auth.json
 *.auth.json
+auth_security.json
+auth_security.*
 user_prefs.json
 custom_config.json
 reports.json

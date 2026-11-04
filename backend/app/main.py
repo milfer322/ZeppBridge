@@ -1,4 +1,5 @@
 import os
+import time
 import copy
 import json
 import sqlite3
@@ -48,6 +49,223 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ------------------------------------------------------------------------------
+# Sistema de Seguridad ZeppBridge Shield (Autenticación y 2FA TOTP)
+# ------------------------------------------------------------------------------
+import secrets
+from .security import (
+    load_security_config,
+    save_security_config,
+    is_security_initialized,
+    hash_password,
+    verify_password,
+    generate_totp_secret,
+    get_totp_uri,
+    generate_qr_svg,
+    verify_totp,
+    create_session,
+    verify_session,
+    revoke_session,
+    check_rate_limit,
+    record_failed_attempt,
+    reset_failed_attempts,
+    render_auth_page,
+    PENDING_SETUPS,
+    PENDING_LOGINS
+)
+
+@app.middleware("http")
+async def auth_security_gate(request: Request, call_next):
+    path = request.url.path
+
+    # Endpoints y recursos públicos exentos
+    if (
+        path.startswith("/api/auth/")
+        or path == "/health"
+        or path in ("/favicon.ico", "/apple-touch-icon.png", "/robots.txt")
+    ):
+        return await call_next(request)
+
+    # 1. Si aún no está configurado (primer acceso del usuario)
+    if not is_security_initialized():
+        if path.startswith("/api/"):
+            return JSONResponse({"error": "setup_required", "message": "Se requiere configuración inicial de seguridad"}, status_code=403)
+        return render_auth_page(mode="setup")
+
+    # 2. Si ya está configurado, validar sesión activa
+    token = request.cookies.get("zb_session") or request.headers.get("X-Auth-Token")
+    sess = verify_session(token)
+
+    if not sess:
+        if path.startswith("/api/"):
+            return JSONResponse({"error": "unauthorized", "login_required": True, "message": "Sesión no válida o expirada"}, status_code=401)
+        return render_auth_page(mode="login")
+
+    # 3. Sesión válida: conceder acceso completo
+    return await call_next(request)
+
+# ------------------------------------------------------------------------------
+# Endpoints de Autenticación y Control 2FA
+# ------------------------------------------------------------------------------
+@app.get("/api/auth/status")
+async def auth_status(request: Request):
+    init = is_security_initialized()
+    token = request.cookies.get("zb_session") or request.headers.get("X-Auth-Token")
+    sess = verify_session(token) if init else None
+    return {
+        "ok": True,
+        "initialized": init,
+        "authenticated": bool(sess),
+        "email": sess["email"] if sess else (load_security_config().get("email") if init else None)
+    }
+
+@app.post("/api/auth/setup-credentials")
+async def auth_setup_credentials(request: Request):
+    if is_security_initialized():
+        return JSONResponse({"ok": False, "message": "La aplicación ya tiene seguridad inicializada."}, status_code=400)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "message": "Petición inválida"}, status_code=400)
+
+    email = str(body.get("email") or "").strip().lower()
+    password = str(body.get("password") or "")
+
+    if not email or "@" not in email or "." not in email:
+        return JSONResponse({"ok": False, "message": "Introduce un correo electrónico válido"}, status_code=400)
+    if len(password) < 6:
+        return JSONResponse({"ok": False, "message": "La contraseña debe tener al menos 6 caracteres"}, status_code=400)
+
+    secret = generate_totp_secret()
+    uri = get_totp_uri(email, secret)
+    svg = generate_qr_svg(uri)
+    pending_token = secrets.token_urlsafe(24)
+
+    PENDING_SETUPS[pending_token] = {
+        "email": email,
+        "password": password,
+        "secret": secret,
+        "expires": time.time() + 600
+    }
+
+    return {
+        "ok": True,
+        "pending_token": pending_token,
+        "totp_secret": secret,
+        "totp_uri": uri,
+        "qr_svg": svg
+    }
+
+@app.post("/api/auth/verify-setup")
+async def auth_verify_setup(request: Request):
+    if is_security_initialized():
+        return JSONResponse({"ok": False, "message": "La seguridad ya está inicializada."}, status_code=400)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "message": "Petición inválida"}, status_code=400)
+
+    pending_token = str(body.get("pending_token") or "")
+    code = str(body.get("code") or "").strip()
+
+    pending = PENDING_SETUPS.get(pending_token)
+    if not pending or pending["expires"] < time.time():
+        return JSONResponse({"ok": False, "message": "La sesión de configuración ha expirado. Vuelve a empezar."}, status_code=400)
+
+    if not verify_totp(pending["secret"], code):
+        return JSONResponse({"ok": False, "message": "Código 2FA incorrecto. Comprueba la hora de tu dispositivo móvil."}, status_code=400)
+
+    pw_hash = hash_password(pending["password"])
+    cfg = {
+        "initialized": True,
+        "email": pending["email"],
+        "password_hash": pw_hash,
+        "totp_secret": pending["secret"],
+        "sessions": {}
+    }
+    save_security_config(cfg)
+    del PENDING_SETUPS[pending_token]
+
+    session_token = create_session(pending["email"], remember=True, user_agent=request.headers.get("user-agent", ""))
+
+    res = JSONResponse({"ok": True, "token": session_token})
+    res.set_cookie(key="zb_session", value=session_token, max_age=30*86400, httponly=True, samesite="lax", path="/")
+    return res
+
+@app.post("/api/auth/login-credentials")
+async def auth_login_credentials(request: Request):
+    client_ip = request.client.host if request.client else "unknown"
+    if not check_rate_limit(client_ip):
+        return JSONResponse({"ok": False, "message": "Demasiados intentos fallidos. Espera 3 minutos."}, status_code=429)
+
+    if not is_security_initialized():
+        return JSONResponse({"ok": False, "message": "Configuración requerida"}, status_code=400)
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "message": "Petición inválida"}, status_code=400)
+
+    email = str(body.get("email") or "").strip().lower()
+    password = str(body.get("password") or "")
+
+    cfg = load_security_config()
+    cfg_email = str(cfg.get("email") or "").strip().lower()
+
+    if email != cfg_email or not verify_password(password, cfg.get("password_hash", "")):
+        record_failed_attempt(client_ip)
+        return JSONResponse({"ok": False, "message": "Correo electrónico o contraseña incorrectos."}, status_code=401)
+
+    temp_token = secrets.token_urlsafe(24)
+    PENDING_LOGINS[temp_token] = {
+        "email": cfg["email"],
+        "expires": time.time() + 300
+    }
+
+    return {"ok": True, "requires_2fa": True, "temp_token": temp_token}
+
+@app.post("/api/auth/verify-login-2fa")
+async def auth_verify_login_2fa(request: Request):
+    client_ip = request.client.host if request.client else "unknown"
+    if not check_rate_limit(client_ip):
+        return JSONResponse({"ok": False, "message": "Demasiados intentos fallidos. Espera 3 minutos."}, status_code=429)
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "message": "Petición inválida"}, status_code=400)
+
+    temp_token = str(body.get("temp_token") or "")
+    code = str(body.get("code") or "").strip()
+    remember = bool(body.get("remember", True))
+
+    pending = PENDING_LOGINS.get(temp_token)
+    if not pending or pending["expires"] < time.time():
+        return JSONResponse({"ok": False, "message": "El código temporal ha expirado. Introduce de nuevo tu contraseña."}, status_code=400)
+
+    cfg = load_security_config()
+    if not verify_totp(cfg.get("totp_secret", ""), code):
+        record_failed_attempt(client_ip)
+        return JSONResponse({"ok": False, "message": "Código de autenticación 2FA incorrecto o caducado."}, status_code=401)
+
+    reset_failed_attempts(client_ip)
+    del PENDING_LOGINS[temp_token]
+
+    session_token = create_session(cfg["email"], remember=remember, user_agent=request.headers.get("user-agent", ""))
+    max_age = 30 * 86400 if remember else None
+
+    res = JSONResponse({"ok": True, "token": session_token})
+    res.set_cookie(key="zb_session", value=session_token, max_age=max_age, httponly=True, samesite="lax", path="/")
+    return res
+
+@app.post("/api/auth/logout")
+async def auth_logout(request: Request):
+    token = request.cookies.get("zb_session") or request.headers.get("X-Auth-Token")
+    revoke_session(token)
+    res = JSONResponse({"ok": True, "message": "Sesión cerrada correctamente"})
+    res.delete_cookie(key="zb_session", path="/")
+    return res
 
 STATIC_DIR = Path("/app/static")
 

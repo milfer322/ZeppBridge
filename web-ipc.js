@@ -352,6 +352,10 @@
         });
 
         if (!res.ok) {
+          if (res.status === 401) {
+            window.location.reload();
+            return;
+          }
           const err = await res.json().catch(() => ({ message: res.statusText }));
           throw new Error(err.message || 'Error en ' + command);
         }
