@@ -34,6 +34,11 @@
     }
   } catch (e) {}
 
+  // Asegurar vista de panel completo (Dashboard / Todas las tarjetas) en entrenamientos
+  try {
+    localStorage.setItem('zeppbridge-workout-stage:v1:view', 'classic');
+  } catch (e) {}
+
   // Sincronizar descarte de ofertas de recuperación si el backend ya tiene cobertura completa
   try {
     const isDismissed = localStorage.getItem('zb.backfillOffer.dismissed.overview');

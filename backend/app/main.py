@@ -2224,6 +2224,21 @@ async def handle_bridge_command(command: str, request: Request):
                 "sets": sets,
                 "exercise_groups": list(groups_dict.values())
             }
+        elif w and (str(w.get("workout_type")) in ("52", "strength") or w.get("workout_type_override") == "strength" or w.get("strength_total_sets")):
+            groups = []
+            if w.get("strength_groups_json"):
+                try:
+                    groups = json.loads(w["strength_groups_json"])
+                except Exception:
+                    pass
+            strength = {
+                "total_sets": w.get("strength_total_sets") or 0,
+                "total_reps": w.get("strength_total_reps") or 0,
+                "total_volume_kg": None,
+                "rest_seconds": w.get("strength_rest_seconds") or None,
+                "sets": [],
+                "exercise_groups": groups if isinstance(groups, list) else []
+            }
 
         return {
             "workout_id": wid,

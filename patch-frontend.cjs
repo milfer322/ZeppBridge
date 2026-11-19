@@ -1932,7 +1932,7 @@ if (fs.existsSync(tourLayerPath)) {
   }
 }
 
-// 24. Establecer vista clásica (Todas las tarjetas) por defecto en lugar de Stage Manager lateral
+// 24. Establecer vista clásica (Dashboard / Todas las tarjetas) por defecto en lugar de Stage Manager lateral
 const stagePrefsPath = 'src/lib/stage/prefs.ts';
 if (fs.existsSync(stagePrefsPath)) {
   let spCode = fs.readFileSync(stagePrefsPath, 'utf8');
@@ -1941,7 +1941,18 @@ if (fs.existsSync(stagePrefsPath)) {
     "try { return localStorage.getItem(VIEW_KEY) === 'stage' ? 'stage' : 'classic'; } catch { return 'classic'; }"
   );
   fs.writeFileSync(stagePrefsPath, spCode, 'utf8');
-  console.log('[Patch] Vista clásica (Todas las tarjetas) establecida por defecto en src/lib/stage/prefs.ts');
+  console.log('[Patch] Vista clásica Dashboard (Todas las tarjetas) establecida por defecto en src/lib/stage/prefs.ts');
+}
+
+const stageI18nPath = 'src/components/workout/stage/stage.i18n.ts';
+if (fs.existsSync(stageI18nPath)) {
+  let siCode = fs.readFileSync(stageI18nPath, 'utf8');
+  siCode = siCode.replace(
+    "expose: 'Todas las tarjetas',",
+    "expose: 'Vista Dashboard (Todas)',"
+  );
+  fs.writeFileSync(stageI18nPath, siCode, 'utf8');
+  console.log('[Patch] Textos descriptivos de Dashboard añadidos en stage.i18n.ts');
 }
 
 console.log('[Patch] Proceso de parcheo finalizado con éxito.');
