@@ -357,3 +357,57 @@ async def run_sync_command(mode: str = "incremental", days: Optional[int] = None
             "message": f"Error ejecutando sincronizador: {str(e)}",
             "message_code": "err.sync.failed"
         }
+
+
+async def run_reprocess_command(force_all: bool = True) -> Dict[str, Any]:
+    """Ejecuta zeppbridge-cli reprocess para reprocesar registros raw con el nuevo parser v3.2.0 (series de fuerza)."""
+    args = [CLI_BIN, "reprocess", "--json"]
+    if force_all:
+        args.append("--all")
+
+    env = os.environ.copy()
+    env["ZEPPBRIDGE_DATA_DIR"] = str(DATA_DIR)
+
+    print(f"[Reprocess] Ejecutando comando CLI: {' '.join(args)}")
+
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env
+        )
+        stdout, stderr = await process.communicate()
+        out_text = stdout.decode("utf-8", errors="replace").strip()
+        err_text = stderr.decode("utf-8", errors="replace").strip()
+
+        print(f"[Reprocess] CLI terminado con código {process.returncode}")
+        if out_text:
+            print(f"[Reprocess] Salida (stdout): {out_text}")
+        if err_text:
+            print(f"[Reprocess] Errores (stderr): {err_text}")
+
+        # Extraer JSON de la salida
+        parsed = None
+        json_match = re.search(r"(\{.*\})", out_text, re.DOTALL)
+        if json_match:
+            try:
+                parsed = json.loads(json_match.group(1))
+            except Exception:
+                pass
+
+        if parsed:
+            return parsed
+
+        return {
+            "total_records": 0,
+            "streams": {},
+            "message": out_text or err_text or "Reproceso completado"
+        }
+    except Exception as e:
+        print(f"[Reprocess] Error al ejecutar: {e}")
+        return {
+            "total_records": 0,
+            "streams": {},
+            "message": f"Error: {e}"
+        }

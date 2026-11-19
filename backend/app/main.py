@@ -26,6 +26,7 @@ from .zepp_cli import (
     get_stored_token,
     save_credentials,
     run_sync_command,
+    run_reprocess_command,
     DATA_DIR,
     get_last_sync_info,
     is_db_empty,
@@ -2692,7 +2693,7 @@ async def handle_bridge_command(command: str, request: Request):
         return {"compacted": 0, "skipped": 0, "bytesBefore": 1024, "bytesAfter": 1024}
 
     elif command == "reprocess_local_data":
-        return {"total_records": 0, "streams": {}, "message": "Datos locales procesados"}
+        return await run_reprocess_command(force_all=True)
 
     # --------------------------------------------------------------------------
     # 7. Dispositivos y Capacidades

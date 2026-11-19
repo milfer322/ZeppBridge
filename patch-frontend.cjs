@@ -1932,4 +1932,16 @@ if (fs.existsSync(tourLayerPath)) {
   }
 }
 
+// 24. Establecer vista clásica (Todas las tarjetas) por defecto en lugar de Stage Manager lateral
+const stagePrefsPath = 'src/lib/stage/prefs.ts';
+if (fs.existsSync(stagePrefsPath)) {
+  let spCode = fs.readFileSync(stagePrefsPath, 'utf8');
+  spCode = spCode.replace(
+    "try { return localStorage.getItem(VIEW_KEY) === 'classic' ? 'classic' : 'stage'; } catch { return 'stage'; }",
+    "try { return localStorage.getItem(VIEW_KEY) === 'stage' ? 'stage' : 'classic'; } catch { return 'classic'; }"
+  );
+  fs.writeFileSync(stagePrefsPath, spCode, 'utf8');
+  console.log('[Patch] Vista clásica (Todas las tarjetas) establecida por defecto en src/lib/stage/prefs.ts');
+}
+
 console.log('[Patch] Proceso de parcheo finalizado con éxito.');
