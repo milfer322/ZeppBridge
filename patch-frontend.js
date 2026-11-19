@@ -1061,7 +1061,7 @@ onMounted(() => {
             </tr>
             <tr>
               <td><strong>🏃 Entrenamientos y Actividades GPS</strong></td>
-              <td>Integrado en la última versión oficial v3.1.1 (v3.1.1 + mejoras de canal avanzado #143).</td>
+              <td>Integrado en la última versión oficial v3.2.0 (v3.2.0 + Stage Manager + #163 Fuerza).</td>
               <td><span class="diff-tag same">100% Sincronizado</span> Mantiene el planificador de entrenamientos semanales, intervalos y carga TLB en la web.</td>
             </tr>
           </tbody>
@@ -1251,8 +1251,8 @@ const settingsVuePath = 'src/views/Settings.vue';
 if (fs.existsSync(settingsVuePath)) {
   let settingsCode = fs.readFileSync(settingsVuePath, 'utf8');
   settingsCode = settingsCode.replace(
-    "sync: syncCard.value.cardTitle,",
-    "sync: syncCard.value.cardTitle,\n  custom: 'Custom e Informes',"
+    /sync:\s*.*?syncCard\.value\.cardTitle.*?,\r?\n/,
+    match => `${match}  custom: 'Custom e Informes',\n`
   );
   settingsCode = settingsCode.replace(
     "sync: autoSyncEnabled.value ? d.value.sumSyncOn(autoSyncInterval.value) : d.value.sumSyncOff,",
@@ -1349,10 +1349,10 @@ if (fs.existsSync(hrDetailPath)) {
     "axisLabel: { color: chartPalette.value.axis, fontSize: 14.5, hideOverlap: true, formatter: (val: string) => displayDateTimeFormatter({ month: 'numeric', day: 'numeric' }).format(parseDisplayDate(val)) },"
   );
 
-  // Formatear la fecha del tooltip de la gráfica de FC máxima diaria
+  // Formatear la fecha del tooltip de la gráfica de FC diaria (máxima / rango de extremos)
   hrCode = hrCode.replace(
-    "return t.value.dailyMaxTooltip(row.date, row.max, row.average, row.samples);",
-    "const dateFormatted = displayDateTimeFormatter({ month: 'short', day: 'numeric', weekday: 'short' }).format(parseDisplayDate(row.date));\n        return t.value.dailyMaxTooltip(dateFormatted, row.max, row.average, row.samples);"
+    /return t\.value\.(dailyMaxTooltip|dailyRangeTooltip)\(row\.date,\s*(.*?)\);/,
+    "const dateFormatted = displayDateTimeFormatter({ month: 'short', day: 'numeric', weekday: 'short' }).format(parseDisplayDate(row.date));\n        return t.value.$1(dateFormatted, $2);"
   );
 
   fs.writeFileSync(hrDetailPath, hrCode, 'utf8');
@@ -1425,11 +1425,7 @@ const appShellPath = fs.existsSync('src/AppShell.vue') ? 'src/AppShell.vue' : 's
 if (fs.existsSync(appShellPath)) {
   let shellCode = fs.readFileSync(appShellPath, 'utf8');
   shellCode = shellCode.replace(
-    `const navigation = computed(() => [
-  { to: '/', label: t.value.navOverview, icon: 'overview' as DesignIconName },
-  { to: '/ai', label: t.value.navHandoff, icon: 'handoff' as DesignIconName },
-  { to: '/settings', label: t.value.navSettings, icon: 'settings' as DesignIconName },
-]);`,
+    /const navigation = computed\(\(\) => \[\r?\n\s*\{ to: '\/', label: t\.value\.navOverview, icon: 'overview' as DesignIconName \},\r?\n\s*\{ to: '\/ai', label: t\.value\.navHandoff, icon: 'handoff' as DesignIconName \},\r?\n\s*\{ to: '\/settings', label: t\.value\.navSettings, icon: 'settings' as DesignIconName \},\r?\n\]\);/,
     `const navigation = computed(() => [
   { to: '/', label: t.value.navOverview, icon: 'overview' as DesignIconName },
   { to: '/workouts', label: (t.value as any).navWorkouts || 'Entrenamientos', icon: 'pace' as DesignIconName },
@@ -1447,8 +1443,8 @@ const navTsPath = 'src/lib/navigation.ts';
 if (fs.existsSync(navTsPath)) {
   let navCode = fs.readFileSync(navTsPath, 'utf8');
   navCode = navCode.replace(
-    "export const navigationBranch = (path: string): string => {\n  if (path === '/ai' || path.startsWith('/ai/')) return '/ai';",
-    "export const navigationBranch = (path: string): string => {\n  if (path === '/ai/plan' || path.startsWith('/ai/plan/')) return '/ai/plan';\n  if (path === '/workouts' || path.startsWith('/workouts/')) return '/workouts';\n  if (path === '/ai' || path.startsWith('/ai/')) return '/ai';"
+    /export const navigationBranch = \(path: string\): string => \{\r?\n\s*if \(path === '\/ai' \|\| path\.startsWith\('\/ai\/'\)\) return '\/ai';/,
+    `export const navigationBranch = (path: string): string => {\n  if (path === '/ai/plan' || path.startsWith('/ai/plan/')) return '/ai/plan';\n  if (path === '/workouts' || path.startsWith('/workouts/')) return '/workouts';\n  if (path === '/ai' || path.startsWith('/ai/')) return '/ai';`
   );
   navCode = navCode.replace(
     "export const TAB_ORDER = ['/', '/ai', '/settings'] as const;",
@@ -1571,7 +1567,7 @@ if (fs.existsSync(updateSectionPath)) {
   let usCode = fs.readFileSync(updateSectionPath, 'utf8');
   usCode = usCode.replace(
     '{{ t.updateVersion(updateState.currentVersion || t.updateVersionLoading) }}',
-    "{{ t.updateVersion((typeof updateState.currentVersion === 'string' && updateState.currentVersion) ? updateState.currentVersion : (updateState.version || '3.1.1')) }}"
+    "{{ t.updateVersion((typeof updateState.currentVersion === 'string' && updateState.currentVersion) ? updateState.currentVersion : (updateState.version || '3.2.0')) }}"
   );
   fs.writeFileSync(updateSectionPath, usCode, 'utf8');
   console.log('[Patch] Formateo seguro de versión aplicado en UpdateSection.vue');

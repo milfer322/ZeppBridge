@@ -387,6 +387,58 @@ def ensure_tables():
             """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_workout_imports_batch ON workout_imports(batch_id);")
 
+            # Tablas añadidas en migraciones 48-52 (v3.2.0)
+            # v48: sleep_nap_stages (etapas de siestas)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS sleep_nap_stages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    sleep_id TEXT NOT NULL,
+                    stage TEXT NOT NULL,
+                    start_time TEXT NOT NULL,
+                    end_time TEXT NOT NULL,
+                    raw_mode INTEGER,
+                    FOREIGN KEY(sleep_id) REFERENCES sleep_sessions(sleep_id) ON DELETE CASCADE
+                );
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_sleep_nap_stages_sleep ON sleep_nap_stages(sleep_id, start_time);")
+
+            # v49: mcp_writes (historial de escrituras locales de IA)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS mcp_writes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    tool TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    target_id TEXT NOT NULL,
+                    label TEXT NOT NULL DEFAULT '',
+                    before_json TEXT,
+                    after_json TEXT NOT NULL,
+                    source_name TEXT,
+                    created_at TEXT NOT NULL,
+                    undone_at TEXT
+                );
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_mcp_writes_target ON mcp_writes(kind, target_id);")
+
+            # v52: workout_strength_sets (Series, repeticiones y peso en entrenamientos de fuerza #163)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS workout_strength_sets (
+                    workout_id TEXT NOT NULL,
+                    set_index INTEGER NOT NULL,
+                    action_code INTEGER NOT NULL,
+                    exercise_key TEXT,
+                    muscle_group TEXT,
+                    reps INTEGER NOT NULL,
+                    weight_value REAL,
+                    weight_unit TEXT NOT NULL CHECK(weight_unit IN ('kg', 'lb')),
+                    weight_kg REAL,
+                    duration_ms INTEGER,
+                    avg_hr INTEGER,
+                    calories_kcal REAL,
+                    PRIMARY KEY (workout_id, set_index),
+                    FOREIGN KEY(workout_id) REFERENCES workouts(workout_id) ON DELETE CASCADE
+                );
+            """)
+
             # Asegurar columnas añadidas en migraciones oficiales
             ensure_columns(conn, "workouts", [
                 ("synced_at", "TEXT"),
@@ -410,7 +462,11 @@ def ensure_tables():
                 ("workout_type_source", "TEXT DEFAULT 'missing'"),
                 ("workout_type_override", "TEXT"),
                 ("workout_type_conflict", "TEXT"),
-                ("gear_id", "TEXT")
+                ("gear_id", "TEXT"),
+                ("strength_total_sets", "INTEGER"),
+                ("strength_total_reps", "INTEGER"),
+                ("strength_rest_seconds", "INTEGER"),
+                ("strength_groups_json", "TEXT")
             ])
 
             ensure_columns(conn, "workout_samples", [
@@ -430,7 +486,20 @@ def ensure_tables():
                 ("rem_seconds", "INTEGER"),
                 ("nap_total_seconds", "INTEGER"),
                 ("unmeasurable_seconds", "INTEGER"),
-                ("validation", "TEXT")
+                ("validation", "TEXT"),
+                ("import_batch_id", "INTEGER")
+            ])
+
+            ensure_columns(conn, "metric_samples", [
+                ("import_batch_id", "INTEGER")
+            ])
+
+            ensure_columns(conn, "daily_metrics", [
+                ("import_batch_id", "INTEGER")
+            ])
+
+            ensure_columns(conn, "import_batches", [
+                ("health_added", "INTEGER NOT NULL DEFAULT 0")
             ])
 
             ensure_columns(conn, "coverage_ledger", [

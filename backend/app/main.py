@@ -36,7 +36,7 @@ from .zepp_cli import (
     clean_region_url
 )
 
-app = FastAPI(title="ZeppBridge Web Native", version="3.0.1")
+app = FastAPI(title="ZeppBridge Web Native", version="3.2.0")
 
 # Middleware de compresión GZIP para acelerar carga web de frontend y respuestas JSON
 app.add_middleware(
@@ -883,7 +883,7 @@ async def handle_bridge_command(command: str, request: Request):
 
 
     elif command in ("plugin:app|version", "plugin:app|get_version", "app_version"):
-        return "3.0.6"
+        return "3.2.0"
 
     elif command in ("plugin:app|name", "plugin:app|get_name", "app_name"):
         return "ZeppBridge"
@@ -894,7 +894,7 @@ async def handle_bridge_command(command: str, request: Request):
     elif command in ("update_view", "update_start", "check_update"):
         return {
             "phase": "up_to_date",
-            "version": "3.0.6",
+            "version": "3.2.0",
             "notes": None,
             "date": None,
             "downloaded": 0,
@@ -1982,6 +1982,20 @@ async def handle_bridge_command(command: str, request: Request):
         total = total_row["count"] if total_row else len(items)
         return {"items": normalized_items, "total": total}
 
+    elif command == "get_hidden_workout_page":
+        limit = body.get("limit", 20)
+        offset = body.get("offset", 0)
+        items = query_all(
+            "SELECT * FROM workouts_hidden ORDER BY start_time DESC LIMIT ? OFFSET ?",
+            (limit, offset)
+        )
+        type_overrides = load_json_file("workout_type_overrides.json", {})
+        feels = load_json_file("workout_feels.json", {})
+        normalized_items = [normalize_workout_dict(r, type_overrides, feels) for r in items]
+        total_row = query_one("SELECT COUNT(*) as count FROM workouts_hidden")
+        total = total_row["count"] if total_row else len(items)
+        return {"items": normalized_items, "total": total}
+
     elif command == "get_workout_detail":
         wid = body.get("workoutId", "")
         row = query_one("SELECT * FROM workouts WHERE workout_id = ?", (wid,))
@@ -2158,6 +2172,58 @@ async def handle_bridge_command(command: str, request: Request):
         calculated_pace = round(moving_secs / (dist_m / 1000.0), 1) if dist_m > 0 and moving_secs > 0 else (w.get("avg_pace") if w else None)
         p_watts = [s["power_watts"] for s in samples if s.get("power_watts") is not None]
 
+        # ----------------------------------------------------------------------
+        # Series y Repeticiones de Fuerza (v3.2.0 - Issue #163)
+        # ----------------------------------------------------------------------
+        strength_rows = query_all(
+            "SELECT set_index, action_code, exercise_key, muscle_group, reps, weight_value, weight_unit, weight_kg, duration_ms, avg_hr, calories_kcal "
+            "FROM workout_strength_sets WHERE workout_id = ? ORDER BY set_index ASC",
+            (wid,)
+        )
+        strength = None
+        if strength_rows:
+            sets = [
+                {
+                    "set_index": int(r["set_index"]),
+                    "action_code": int(r["action_code"]),
+                    "exercise_key": r.get("exercise_key"),
+                    "muscle_group": r.get("muscle_group"),
+                    "reps": int(r["reps"]),
+                    "weight_value": float(r["weight_value"]) if r.get("weight_value") is not None else None,
+                    "weight_unit": r.get("weight_unit") or "kg",
+                    "weight_kg": float(r["weight_kg"]) if r.get("weight_kg") is not None else None,
+                    "duration_ms": int(r["duration_ms"]) if r.get("duration_ms") is not None else None,
+                    "avg_hr": int(r["avg_hr"]) if r.get("avg_hr") is not None else None,
+                    "calories_kcal": float(r["calories_kcal"]) if r.get("calories_kcal") is not None else None,
+                }
+                for r in strength_rows
+            ]
+            total_sets = len(sets)
+            total_reps = sum(s["reps"] for s in sets)
+            total_vol = sum((s["weight_kg"] or 0.0) * s["reps"] for s in sets)
+            groups_dict = {}
+            for s in sets:
+                k = (s["action_code"], s.get("exercise_key"), s.get("muscle_group"))
+                if k not in groups_dict:
+                    groups_dict[k] = {
+                        "action_code": s["action_code"],
+                        "exercise_key": s.get("exercise_key"),
+                        "muscle_group": s.get("muscle_group"),
+                        "sets": 0,
+                        "total_reps": 0,
+                    }
+                groups_dict[k]["sets"] += 1
+                groups_dict[k]["total_reps"] += s["reps"]
+
+            strength = {
+                "total_sets": (w.get("strength_total_sets") if w else None) or total_sets,
+                "total_reps": (w.get("strength_total_reps") if w else None) or total_reps,
+                "total_volume_kg": round(total_vol, 1) if total_vol > 0 else None,
+                "rest_seconds": (w.get("strength_rest_seconds") if w else None) or None,
+                "sets": sets,
+                "exercise_groups": list(groups_dict.values())
+            }
+
         return {
             "workout_id": wid,
             "samples": samples,
@@ -2179,7 +2245,17 @@ async def handle_bridge_command(command: str, request: Request):
                 "average_vertical_ratio_pct": None,
                 "best_equivalent_pace_s_per_km": None
             },
-            "climbs": None
+            "climbs": None,
+            "strength": strength
+        }
+
+    elif command == "get_strength_catalog":
+        locale = body.get("locale", "en")
+        return {
+            "lang": locale,
+            "fetched_at": None,
+            "status": "unavailable",
+            "actions": []
         }
 
     elif command == "get_workout_insight":
@@ -2456,6 +2532,17 @@ async def handle_bridge_command(command: str, request: Request):
             }
         return row
 
+    elif command == "get_sleep_nap_stages":
+        sid = body.get("sleepId", "")
+        rows = query_all(
+            "SELECT stage, start_time, end_time FROM sleep_nap_stages WHERE sleep_id = ? ORDER BY start_time ASC, id ASC",
+            (sid,)
+        )
+        return [
+            {"stage": r["stage"], "start_time": r["start_time"], "end_time": r["end_time"]}
+            for r in rows
+        ]
+
     # --------------------------------------------------------------------------
     # 6. Informes y Salud de Datos
     # --------------------------------------------------------------------------
@@ -2576,8 +2663,8 @@ async def handle_bridge_command(command: str, request: Request):
             "generated_at": now_iso,
             "database": {
                 "schema_version": 1,
-                "normalizer_revision": "v3.0.1",
-                "stored_normalizer_revision": "v3.0.1",
+                "normalizer_revision": "v3.2.0",
+                "stored_normalizer_revision": "v3.2.0",
                 "normalizer_replay_pending": False,
                 "replay_in_progress": False,
                 "database_bytes": db_size,
@@ -2988,9 +3075,9 @@ async def handle_bridge_command(command: str, request: Request):
         manifest = {
             "id": bid,
             "created_at": datetime.utcnow().isoformat() + "Z",
-            "app_version": "3.0.1",
+            "app_version": "3.2.0",
             "schema_version": 1,
-            "normalizer_revision": "v3.0.1",
+            "normalizer_revision": "v3.2.0",
             "kind": "manual",
             "coverage": {
                 "earliest_sample_at": None,
@@ -3037,9 +3124,9 @@ async def handle_bridge_command(command: str, request: Request):
             "manifest": {
                 "id": bid,
                 "created_at": datetime.utcnow().isoformat() + "Z",
-                "app_version": "3.0.1",
+                "app_version": "3.2.0",
                 "schema_version": 1,
-                "normalizer_revision": "v3.0.1",
+                "normalizer_revision": "v3.2.0",
                 "kind": "manual",
                 "coverage": {"earliest_sample_at": None, "latest_sample_at": None, "last_cloud_sync_at": None},
                 "table_counts": {},
@@ -3897,7 +3984,7 @@ async def handle_bridge_command(command: str, request: Request):
     elif command in ("update_view", "update_start", "updates::silent::update_view", "updates::silent::update_start"):
         return {
             "phase": "up_to_date",
-            "version": "3.0.1",
+            "version": "3.2.0",
             "notes": None,
             "date": None,
             "downloaded": 0,
@@ -3912,6 +3999,134 @@ async def handle_bridge_command(command: str, request: Request):
 
     elif command == "update_set_auto":
         return True
+
+    elif command == "mcp_writes_list":
+        rows = query_all("SELECT id, tool, kind, target_id, label, before_json, after_json, source_name, created_at, undone_at FROM mcp_writes ORDER BY id DESC LIMIT 30")
+        return [
+            {
+                "id": r["id"],
+                "tool": r["tool"],
+                "kind": r["kind"],
+                "target_id": r["target_id"],
+                "label": r["label"],
+                "before_json": r["before_json"],
+                "after_json": r["after_json"],
+                "source_name": r["source_name"],
+                "created_at": r["created_at"],
+                "undone_at": r["undone_at"]
+            }
+            for r in rows
+        ]
+
+    elif command == "mcp_write_undo":
+        wid = body.get("id")
+        now_str = datetime.utcnow().isoformat() + "Z"
+        execute_write("UPDATE mcp_writes SET undone_at = ? WHERE id = ?", (now_str, wid))
+        rows = query_all("SELECT id, tool, kind, target_id, label, before_json, after_json, source_name, created_at, undone_at FROM mcp_writes ORDER BY id DESC LIMIT 30")
+        return [
+            {
+                "id": r["id"],
+                "tool": r["tool"],
+                "kind": r["kind"],
+                "target_id": r["target_id"],
+                "label": r["label"],
+                "before_json": r["before_json"],
+                "after_json": r["after_json"],
+                "source_name": r["source_name"],
+                "created_at": r["created_at"],
+                "undone_at": r["undone_at"]
+            }
+            for r in rows
+        ]
+
+    elif command == "set_mcp_task_only":
+        on = body.get("on", False)
+        prefs = load_json_file("user_prefs.json", {})
+        prefs["mcp_task_only"] = bool(on)
+        save_json_file("user_prefs.json", prefs)
+        return bool(on)
+
+    elif command == "store_import_status":
+        return {
+            "required": False,
+            "copying": False,
+            "sources": [],
+            "failed": False
+        }
+
+    elif command == "store_import_decide":
+        return {"success": True}
+
+    elif command == "export_for_unstrap":
+        return {
+            "path": "exports/zeppbridge-for-unstrap.zip",
+            "workouts": 0,
+            "heart_rate_points": 0
+        }
+
+    elif command == "cloud_companion_state":
+        return {
+            "supported": False,
+            "configured": False,
+            "config_unreadable": False,
+            "state_dir": None,
+            "uploader_dir": None,
+            "config": None,
+            "site_url": None,
+            "last_run": None,
+            "readers": [],
+            "task_follow": False,
+            "task_upload": False,
+            "running": False,
+            "default_bin_dir": None,
+        }
+
+    elif command in ("cloud_companion_save_config", "cloud_companion_upload", "cloud_companion_setup", "cloud_companion_open"):
+        return {
+            "supported": False,
+            "configured": False,
+            "config_unreadable": False,
+            "state_dir": None,
+            "uploader_dir": None,
+            "config": None,
+            "site_url": None,
+            "last_run": None,
+            "readers": [],
+            "task_follow": False,
+            "task_upload": False,
+            "running": False,
+            "default_bin_dir": None,
+        }
+
+    elif command == "push_state":
+        return {
+            "configured": False,
+            "enabled": False,
+            "site": None,
+            "site_url": None,
+            "has_secrets": False,
+            "credential_store_ok": True,
+            "last": None,
+            "running": False,
+            "config_error_code": None,
+            "companion_site_url": None,
+            "companion_tasks": False,
+        }
+
+    elif command in ("push_save", "push_set_enabled", "push_import_companion", "push_run", "push_remove"):
+        return {
+            "configured": False,
+            "enabled": False,
+            "site": None,
+            "site_url": None,
+            "has_secrets": False,
+            "credential_store_ok": True,
+            "last": None,
+            "running": False,
+            "config_error_code": None,
+            "companion_site_url": None,
+            "companion_tasks": False,
+        }
 
     # --------------------------------------------------------------------------
     # 14. Novedades v3.0.5+: Rings, Logbook (PB, Zapatillas, Carreras), Coach & Cartas
@@ -4858,6 +5073,32 @@ async def handle_bridge_command(command: str, request: Request):
             }
         return None
 
+    elif command == "data_letters_mail_status":
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        conn = get_db_connection()
+        due_ids = []
+        latest_weekly_id = None
+        if conn:
+            try:
+                due_rows = conn.execute(
+                    "SELECT id FROM data_letters WHERE kind = 'capsule' AND open_on <= ? AND opened_at IS NULL",
+                    (today_str,)
+                ).fetchall()
+                due_ids = [r["id"] for r in due_rows]
+                weekly_row = conn.execute(
+                    "SELECT id FROM data_letters WHERE kind = 'weekly' ORDER BY id DESC LIMIT 1"
+                ).fetchone()
+                if weekly_row:
+                    latest_weekly_id = weekly_row["id"]
+            except Exception:
+                pass
+            finally:
+                conn.close()
+        return {
+            "latest_weekly_id": latest_weekly_id,
+            "due_capsule_ids": due_ids
+        }
+
     elif command == "workout_feedback_toast_due":
         return None
 
@@ -4895,6 +5136,7 @@ async def handle_bridge_command(command: str, request: Request):
                         "file_name": r["file_name"],
                         "imported_at": r["imported_at"],
                         "added": r["added"],
+                        "health_added": r["health_added"] if "health_added" in r.keys() else 0,
                         "duplicates": r["duplicates"],
                         "unreadable": r["unreadable"],
                         "undone_at": r["undone_at"]
@@ -4904,6 +5146,10 @@ async def handle_bridge_command(command: str, request: Request):
             finally:
                 conn.close()
         return batches
+
+    elif command == "workout_import_sources":
+        rows = query_all("SELECT workout_id, source FROM workouts WHERE source IS NOT NULL")
+        return {r["workout_id"]: r["source"] for r in rows}
 
     elif command == "import_workouts":
         return {

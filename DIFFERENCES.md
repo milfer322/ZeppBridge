@@ -21,7 +21,7 @@ Este documento describe detalladamente las diferencias arquitectónicas, de infr
 | **Formato de Fechas** | Formato americano Mes/Día (MM/DD) en varias vistas y gráficas. | **Formato europeo/español Día/Mes (DD/MM)** aplicado en todas las gráficas, tablas y tooltips. |
 | **Análisis Cardíaco Especializado** | Solo plantillas genéricas de sueño y workout. | **Nuevos intents de IA:** Módulos dedicados para 💓 Pulsaciones (7 días) y 📈 Cardio (30 días) evaluando HRV y RHR. |
 | **Gestión de Respaldos (Backups)** | Base de datos SQLite guardada en carpetas del sistema operativo del usuario. | **Descarga de backup `.db` en 1 clic**, restauración directa desde la interfaz y exportador CSV para Excel. |
-| **Planificador y Novedades Upstream** | Añadido progresivamente hasta v3.1.1 en upstream oficial. | **Totalmente preservado y sincronizado (v3.1.1):** Diseñador de intervalos, retrospectiva de anillos, diario deportivo, deportes ampliados (#143), carga TLB, migración SQLite 47 (`device_local_state`), ocultación de dispositivos y supresión de onboarding invasivo. |
+| **Planificador, Fuerza y Novedades Upstream** | Añadido progresivamente hasta v3.2.0 en upstream oficial. | **Totalmente preservado y sincronizado (v3.2.0):** Soporte oficial de entrenamientos de fuerza con series, repeticiones, kilajes y mapa muscular anatómico (#163), Stage Manager de detalles deportivos, fases de siesta (`sleep_nap_stages`), perfil de elevación, diseñador de intervalos, retrospectiva de anillos, diario deportivo, deportes ampliados (#143), carga TLB, migración SQLite 47-52, ocultación de dispositivos y supresión de onboarding invasivo. |
 
 ---
 
@@ -150,5 +150,5 @@ flowchart TD
 ## 🔄 Compatibilidad con el Proyecto Upstream
 
 Este fork mantiene una sincronización estricta con las versiones oficiales de `lingcang728/ZeppBridge`:
-* **Versión Base Sincronizada:** **v3.1.1** (alineado con la última release oficial y rama `main` upstream, incorporando la migración SQLite 47 `device_local_state`, soporte para ocultar dispositivos, sincronización selectiva, recuperación de credenciales oficiales, deportes adicionales #143, canal avanzado de distancias, retrospectiva anual de anillos y diario de actividad).
+* **Versión Base Sincronizada:** **v3.2.0** (alineado con la última release oficial y rama `main` upstream, incorporando soporte completo de entrenamientos de fuerza con series y pesos #163, arquitectura Stage Manager, fases de siesta, perfil de elevación continua, la migración SQLite 47-52 `device_local_state` y `workout_strength_sets`, soporte para ocultar dispositivos, sincronización selectiva, recuperación de credenciales oficiales, deportes adicionales #143, canal avanzado de distancias, retrospectiva anual de anillos y diario de actividad).
 * Los parches se aplican de forma no destructiva mediante `patch-frontend.cjs` durante el proceso de construcción de la imagen de Docker, lo que garantiza que cualquier corrección o nueva función añadida por el autor original pueda incorporarse sin romper la funcionalidad web ni las personalizaciones añadidas.
