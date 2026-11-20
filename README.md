@@ -1,6 +1,6 @@
 # ZeppBridge Web (Docker) ⌚🌐
 
-> **Fork autónomo de [ZeppBridge](https://github.com/lingcang728/ZeppBridge) (actualizado y sincronizado a la última versión oficial v3.2.0) adaptado para funcionar 100% a través del navegador web, sin necesidad de instalar la aplicación de escritorio y completamente blindado con autenticación de doble factor (2FA / TOTP).**
+> **Fork autónomo de [ZeppBridge](https://github.com/lingcang728/ZeppBridge) (actualizado y sincronizado a la última versión oficial v3.2.1) adaptado para funcionar 100% a través del navegador web, sin necesidad de instalar la aplicación de escritorio y completamente blindado con autenticación de doble factor (2FA / TOTP).**
 
 Permite alojar tu propio servidor personal de sincronización y análisis de salud de **Amazfit / Zepp** en cualquier máquina con Docker (servidor local, NAS Unraid, Synology, Raspberry Pi, VPS o mini PC) y acceder a toda tu información deportiva y biomédica desde cualquier dispositivo (ordenador, móvil o tablet) simplemente abriendo una URL en tu navegador web.
 
@@ -30,8 +30,8 @@ El proyecto original de ZeppBridge es una aplicación de escritorio basada en Ta
 * ☀️ **Informe Matutino Automático:** Recibe cada mañana un resumen motivacional de cómo ha ido tu sueño antes de levantarte.
 * 🔄 **Auto-Sync en Segundo Plano:** Sincronización incremental periódica configurable (por defecto cada 5 minutos).
 * 💾 **Respaldos de Base de Datos y Exportación CSV:** Copia de seguridad en 1 clic de tu base de datos SQLite y exportación de sesiones a formato CSV.
-* 🏋️ **Entrenamientos de Fuerza, Series, Repeticiones y Mapa Muscular (v3.2.0 - Issue #163):** Soporte oficial completo para entrenamientos de gimnasio / musculación (`type = 52`). Desglose de cada serie, repeticiones, peso levantado (kg/lb), tiempos de recuperación y mapa muscular anatómico coloreado con los grupos musculares involucrados.
-* 🚀 **Actualizado a ZeppBridge v3.2.0 Oficial:** Totalmente alineado con la última release oficial upstream, incluyendo la nueva arquitectura modular Stage Manager para los detalles de entrenamiento, tarjeta de fases de siestas (`sleep_nap_stages`), perfil de elevación continua, compatibilidad con ledger de cambios MCP (`mcp_writes`) y supresión permanente de tutoriales emergentes invasivos tras cada actualización.
+* 🏋️ **Entrenamientos de Fuerza, Series, Repeticiones y Mapa Muscular (v3.2.1 - Issues #163 y #170):** Soporte oficial completo para entrenamientos de gimnasio / musculación (`type = 52`). Desglose de cada serie, repeticiones, peso levantado (kg/lb), tiempos de recuperación y mapa muscular anatómico coloreado con los grupos musculares involucrados. Con el parser tolerante de v3.2.1 corregido para registrar descansos y pesos corporales.
+* 🚀 **Actualizado a ZeppBridge v3.2.1 Oficial:** Totalmente alineado con la última release oficial upstream, incluyendo la corrección crítica de series y pesos en fuerza (#170), retrocompatibilidad de detalles desde el canal avanzado, vista clásica / dashboard configurable por defecto, tarjeta de fases de siestas (`sleep_nap_stages`), perfil de elevación continua, compatibilidad con ledger de cambios MCP (`mcp_writes`) y supresión permanente de tutoriales emergentes invasivos tras cada actualización.
 * ✨ **Módulo Integrado de Diferencias:** Panel visual en Configuración y documentación completa para consultar en cualquier momento todas las diferencias arquitectónicas y funcionales respecto al ZeppBridge oficial.
 
 > 📖 **Comparativa Detallada:** Consulta la guía **[DIFFERENCES.md](file:///a:/dockers_customs/zeppbridge/DIFFERENCES.md)** para ver la tabla comparativa exhaustiva, diagramas de arquitectura y desglose de novedades frente a la app de escritorio original.
@@ -110,5 +110,5 @@ Toda la información personal (base de datos SQLite `zepp.db`, configuración de
 ## ⚖️ Licencia y Reconocimientos
 
 Este proyecto es un fork y extensión para la web de **[ZeppBridge](https://github.com/lingcang728/ZeppBridge)** por `lingcang728`.
-Se encuentra actualizado con la última versión de su creador original (**v3.2.0** y rama `main`, incorporando soporte completo de entrenamientos de fuerza con series y pesos #163, arquitectura Stage Manager, fases de siesta, soporte de deportes adicionales #143, canal avanzado de distancias, retrospectiva de anillos anuales, diario deportivo, planificador de entrenamientos y migración de estado de dispositivos).
+Se encuentra actualizado con la última versión de su creador original (**v3.2.1** y rama `main`, incorporando soporte completo de entrenamientos de fuerza con series y pesos #163 y corrección tolerante #170, arquitectura Stage Manager con vista clásica / dashboard configurable por defecto, fases de siesta, soporte de deportes adicionales #143, canal avanzado de distancias, retrospectiva de anillos anuales, diario deportivo, planificador de entrenamientos y migración de estado de dispositivos).
 Distribuido bajo la misma licencia de código abierto que el proyecto original.

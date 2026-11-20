@@ -1947,10 +1947,17 @@ if (fs.existsSync(stagePrefsPath)) {
 const stageI18nPath = 'src/components/workout/stage/stage.i18n.ts';
 if (fs.existsSync(stageI18nPath)) {
   let siCode = fs.readFileSync(stageI18nPath, 'utf8');
-  siCode = siCode.replace(
-    "expose: 'Todas las tarjetas',",
-    "expose: 'Vista Dashboard (Todas)',"
-  );
+  if (siCode.includes("expose: 'Todas las tarjetas',")) {
+    siCode = siCode.replace(
+      "expose: 'Todas las tarjetas',",
+      "expose: 'Vista Dashboard (Todas)',"
+    );
+  } else if (siCode.includes("expose: 'Vista clásica',")) {
+    siCode = siCode.replace(
+      "expose: 'Vista clásica',",
+      "expose: 'Vista Dashboard (Todas)',"
+    );
+  }
   fs.writeFileSync(stageI18nPath, siCode, 'utf8');
   console.log('[Patch] Textos descriptivos de Dashboard añadidos en stage.i18n.ts');
 }

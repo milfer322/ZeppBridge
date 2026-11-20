@@ -2231,14 +2231,18 @@ async def handle_bridge_command(command: str, request: Request):
                     groups = json.loads(w["strength_groups_json"])
                 except Exception:
                     pass
-            strength = {
-                "total_sets": w.get("strength_total_sets") or 0,
-                "total_reps": w.get("strength_total_reps") or 0,
-                "total_volume_kg": None,
-                "rest_seconds": w.get("strength_rest_seconds") or None,
-                "sets": [],
-                "exercise_groups": groups if isinstance(groups, list) else []
-            }
+            total_sets = w.get("strength_total_sets") or (len(groups) if groups else 0)
+            total_reps = w.get("strength_total_reps") or (sum(g.get("total_reps", 0) for g in groups) if groups else 0)
+            rest_secs = w.get("strength_rest_seconds")
+            if total_sets > 0 or groups or rest_secs is not None:
+                strength = {
+                    "total_sets": total_sets,
+                    "total_reps": total_reps,
+                    "total_volume_kg": None,
+                    "rest_seconds": rest_secs,
+                    "sets": [],
+                    "exercise_groups": groups if isinstance(groups, list) else []
+                }
 
         return {
             "workout_id": wid,
@@ -2266,7 +2270,20 @@ async def handle_bridge_command(command: str, request: Request):
         }
 
     elif command == "get_strength_catalog":
-        locale = body.get("locale", "en")
+        locale = body.get("locale") or body.get("lang") or "es"
+        cat_file = DATA_DIR / f"strength-catalog-{locale}.json"
+        if cat_file.exists():
+            try:
+                with open(cat_file, "r", encoding="utf-8") as fp:
+                    data = json.load(fp)
+                    return {
+                        "lang": locale,
+                        "fetched_at": data.get("fetched_at"),
+                        "status": "fresh",
+                        "actions": data.get("actions", [])
+                    }
+            except Exception:
+                pass
         return {
             "lang": locale,
             "fetched_at": None,
@@ -5122,6 +5139,11 @@ async def handle_bridge_command(command: str, request: Request):
         return None
 
     elif command in ("get_workout_detail_coverage", "start_workout_detail_backfill"):
+        if command == "start_workout_detail_backfill":
+            try:
+                asyncio.create_task(run_reprocess_command(force_all=True))
+            except Exception as e:
+                print(f"[Backfill] Error iniciando reproceso: {e}")
         total_w = query_one("SELECT count(*) as cnt FROM workouts") or {"cnt": 0}
         persisted_w = query_one("SELECT count(*) as cnt FROM workouts WHERE sample_count > 0") or {"cnt": 0}
         total = total_w.get("cnt", 0)
