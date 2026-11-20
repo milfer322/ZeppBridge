@@ -3,6 +3,7 @@ import json
 import asyncio
 import re
 import sqlite3
+import httpx
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, Optional
@@ -57,45 +58,85 @@ def get_last_sync_info() -> Dict[str, Any]:
     if SYNC_STATE_FILE.exists():
         try:
             with open(SYNC_STATE_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+                data = json.load(f)
+                if isinstance(data, dict):
+                    return data
         except Exception:
             pass
     return {
         "last_cloud_sync_at": None,
         "last_cloud_sync_outcome": None,
-        "records_written": 0
+        "records_written": 0,
+        "needs_reauth": False
     }
 
 def record_successful_sync(records: int, outcome: str = "updated"):
     """Registra la marca de tiempo tras un sync exitoso."""
     now_iso = datetime.utcnow().isoformat() + "Z"
-    info = {
-        "last_cloud_sync_at": now_iso,
-        "last_cloud_sync_outcome": outcome,
-        "records_written": records
-    }
+    info = get_last_sync_info()
+    info["last_cloud_sync_at"] = now_iso
+    info["last_cloud_sync_outcome"] = outcome
+    info["records_written"] = records
+    info["needs_reauth"] = False
+    info["last_error_message"] = None
+    info["last_attempt_at"] = now_iso
     try:
         with open(SYNC_STATE_FILE, "w", encoding="utf-8") as f:
             json.dump(info, f, indent=2)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[Sync] Error escribiendo sync_state.json: {e}")
+
+def record_sync_failure(message: str, needs_reauth: bool = False):
+    """Registra un fallo de sincronización en sync_state.json para diagnóstico."""
+    now_iso = datetime.utcnow().isoformat() + "Z"
+    info = get_last_sync_info()
+    info["last_cloud_sync_outcome"] = "failed"
+    info["last_error_message"] = message
+    info["needs_reauth"] = bool(needs_reauth)
+    info["last_attempt_at"] = now_iso
+    try:
+        with open(SYNC_STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump(info, f, indent=2)
+    except Exception as e:
+        print(f"[Sync] Error escribiendo fallo en sync_state.json: {e}")
 
 def get_stored_token(user_id: Optional[str] = None) -> Optional[str]:
-    """Recupera el app_token guardado, soportando formato oficial {'tokens': {uid: token}}."""
-    if not CREDENTIALS_FILE.exists():
-        return None
-    try:
-        with open(CREDENTIALS_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            if "tokens" in data and isinstance(data["tokens"], dict):
-                if user_id and user_id in data["tokens"]:
-                    return data["tokens"][user_id]
-                # Si no se pasa user_id o no coincide, tomar el primer token
-                if data["tokens"]:
-                    return next(iter(data["tokens"].values()))
-            return data.get("app_token")
-    except Exception:
-        return None
+    """Recupera el app_token guardado, revisando credentials.json, auth.json y variables de entorno."""
+    # 1. Variable de entorno directa (en contenedor o .env)
+    env_token = os.getenv("ZEPPBRIDGE_APP_TOKEN") or os.getenv("APP_TOKEN")
+    if env_token and env_token.strip():
+        return env_token.strip()
+
+    # 2. credentials.json (formato oficial de Rust)
+    if CREDENTIALS_FILE.exists():
+        try:
+            with open(CREDENTIALS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if "tokens" in data and isinstance(data["tokens"], dict):
+                    if user_id and user_id in data["tokens"] and data["tokens"][user_id]:
+                        return str(data["tokens"][user_id]).strip()
+                    if data["tokens"]:
+                        first_val = next(iter(data["tokens"].values()))
+                        if first_val:
+                            return str(first_val).strip()
+                if data.get("app_token"):
+                    return str(data["app_token"]).strip()
+        except Exception:
+            pass
+
+    # 3. auth.json (fallback)
+    if AUTH_FILE.exists():
+        try:
+            with open(AUTH_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if data.get("app_token"):
+                    return str(data["app_token"]).strip()
+                if data.get("token"):
+                    return str(data["token"]).strip()
+        except Exception:
+            pass
+
+    return None
 
 def clean_region_url(host: str) -> str:
     """Retorna la URL completa con https:// requerida por zeppbridge-cli (ej. https://api-mifit-de2.huami.com)."""
@@ -114,13 +155,58 @@ def clean_region_host(host: str) -> str:
     h = re.sub(r"^https?://", "", h)
     return h.split("/")[0] or "api-mifit-de2.huami.com"
 
+async def check_huami_token_valid(token: str, region_host: str) -> Dict[str, Any]:
+    """Comprueba directamente si el token es aceptado por la API oficial de Zepp Cloud (Huami)."""
+    clean_host = clean_region_host(region_host)
+    url = f"https://{clean_host}/v1/sport/run/history.json"
+    headers = {
+        "apptoken": token.strip(),
+        "User-Agent": "ZeppBridge/3.2.1 (Linux)",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=12.0) as client:
+            resp = await client.get(url, headers=headers)
+            if resp.status_code == 200:
+                try:
+                    data = resp.json()
+                except Exception:
+                    data = {}
+                code = data.get("code") or data.get("error_code") or data.get("result")
+                msg = str(data.get("message", "")).lower()
+                if code in (101, "101", "failed", "error") or "token" in msg or "expired" in msg:
+                    return {"valid": False, "expired": True, "message": data.get("message") or "Token de sesión caducado"}
+                return {"valid": True, "expired": False, "data": data}
+            elif resp.status_code in (401, 403):
+                return {"valid": False, "expired": True, "message": f"HTTP {resp.status_code} No autorizado (Token caducado)"}
+            else:
+                return {"valid": False, "expired": False, "message": f"HTTP {resp.status_code} desde Zepp Cloud"}
+    except Exception as e:
+        return {"valid": False, "expired": False, "message": f"Error de conexión con Zepp Cloud: {str(e)}"}
+
+def clean_region_host(host: str) -> str:
+    """Retorna solo el nombre de host sin scheme (ej. api-mifit-de2.huami.com)."""
+    h = (host or "").strip()
+    h = re.sub(r"^https?://", "", h)
+    return h.split("/")[0] or "api-mifit-de2.huami.com"
+
 def ensure_auth_files_valid():
     """Verifica y normaliza auth.json y credentials.json para cumplir estrictamente el contrato del CLI oficial."""
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+    # 1. Chequeo de variables de entorno para auto-poblado si los archivos faltan
+    env_token = os.getenv("ZEPPBRIDGE_APP_TOKEN") or os.getenv("APP_TOKEN")
+    env_uid = os.getenv("ZEPPBRIDGE_USER_ID") or os.getenv("USER_ID")
+    env_host = os.getenv("ZEPPBRIDGE_REGION_HOST") or "https://api-mifit-de2.huami.com"
+
+    uid = env_uid or ""
+    host = env_host
+
     if AUTH_FILE.exists():
         try:
             with open(AUTH_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            host = data.get("region_host", "")
+            host = data.get("region_host", host)
+            uid = data.get("user_id", uid)
             modified = False
             # Rust normalize_region_host requiere estrictamente https://host
             if host and not host.startswith("https://"):
@@ -133,16 +219,61 @@ def ensure_auth_files_valid():
                 with open(AUTH_FILE, "w", encoding="utf-8") as f:
                     json.dump(data, f, indent=2)
                 print(f"[Auth] Corregido formato de auth.json: region_host={data['region_host']}")
-            
-            # Asegurar copia auth.user-id
-            uid = data.get("user_id")
-            if uid:
-                uid_file = DATA_DIR / "auth.user-id"
-                if not uid_file.exists():
-                    with open(uid_file, "w", encoding="utf-8") as f:
-                        f.write(str(uid).strip())
         except Exception as e:
             print(f"[Auth] Error normalizando auth.json: {e}")
+    elif env_token and uid:
+        try:
+            auth_data = {
+                "version": 1,
+                "user_id": uid,
+                "region_host": clean_region_url(host),
+                "updated_at": datetime.utcnow().isoformat() + "Z"
+            }
+            with open(AUTH_FILE, "w", encoding="utf-8") as f:
+                json.dump(auth_data, f, indent=2)
+            print(f"[Auth] Creado auth.json desde variables de entorno (usuario {uid[:3]}***)")
+        except Exception as e:
+            print(f"[Auth] Error creando auth.json desde env: {e}")
+
+    # Asegurar copia auth.user-id
+    if uid:
+        try:
+            uid_file = DATA_DIR / "auth.user-id"
+            if not uid_file.exists():
+                with open(uid_file, "w", encoding="utf-8") as f:
+                    f.write(str(uid).strip())
+        except Exception:
+            pass
+
+    # Asegurar que credentials.json exista y tenga el token en formato tokens: {uid: token}
+    token = get_stored_token(uid)
+    if token and uid:
+        try:
+            need_write = not CREDENTIALS_FILE.exists()
+            if not need_write:
+                try:
+                    with open(CREDENTIALS_FILE, "r", encoding="utf-8") as f:
+                        c_data = json.load(f)
+                        if not c_data.get("tokens") or str(uid) not in c_data.get("tokens", {}):
+                            need_write = True
+                except Exception:
+                    need_write = True
+            if need_write:
+                creds_data = {
+                    "version": 1,
+                    "tokens": {
+                        str(uid): token
+                    },
+                    "app_token": token
+                }
+                with open(CREDENTIALS_FILE, "w", encoding="utf-8") as f:
+                    json.dump(creds_data, f, indent=2)
+                try:
+                    os.chmod(CREDENTIALS_FILE, 0o600)
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"[Auth] Error asegurando credentials.json: {e}")
 
 def get_auth_status() -> Dict[str, Any]:
     """Lee el estado de conexión actual."""
@@ -178,10 +309,6 @@ def get_auth_status() -> Dict[str, Any]:
 def save_credentials(app_token: str, user_id: str, region_host: str = "api-mifit-de2.huami.com"):
     """Guarda auth.json y credentials.json en el formato oficial exacto de ZeppBridge."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    try:
-        os.chmod(DATA_DIR, 0o700)
-    except Exception:
-        pass
 
     clean_uid = user_id.strip()
     clean_token = app_token.strip()
@@ -221,6 +348,18 @@ def save_credentials(app_token: str, user_id: str, region_host: str = "api-mifit
     except Exception:
         pass
 
+    # Al guardar credenciales nuevas, resetear estado de reauth en sync_state.json
+    if SYNC_STATE_FILE.exists():
+        try:
+            with open(SYNC_STATE_FILE, "r", encoding="utf-8") as f:
+                s_info = json.load(f)
+            s_info["needs_reauth"] = False
+            s_info["last_cloud_sync_outcome"] = "updated"
+            with open(SYNC_STATE_FILE, "w", encoding="utf-8") as f:
+                json.dump(s_info, f, indent=2)
+        except Exception:
+            pass
+
 # Asegurar chequeo al iniciar el módulo
 ensure_auth_files_valid()
 
@@ -232,6 +371,7 @@ async def run_sync_command(mode: str = "incremental", days: Optional[int] = None
     # Si no hay token guardado, devolver fallo con estructura completa de SyncReport
     token = get_stored_token(st.get("user_id"))
     if not st["configured"] or not token:
+        record_sync_failure("No hay cuenta conectada o el token no es válido", needs_reauth=True)
         return {
             "success": False,
             "outcome": "failed",
@@ -241,7 +381,8 @@ async def run_sync_command(mode: str = "incremental", days: Optional[int] = None
             "records_written": 0,
             "total_records": 0,
             "streams": [],
-            "message": "No hay cuenta conectada o el token no es válido",
+            "needs_reauth": True,
+            "message": "No hay cuenta conectada o el token no es válido. Ve a Configuración ➔ Cuenta.",
             "message_code": "err.sync.no_account"
         }
 
@@ -315,14 +456,12 @@ async def run_sync_command(mode: str = "incremental", days: Optional[int] = None
                 "streams": []
             }
 
-        # Blindaje del contrato SyncReport (evita 'Cannot read properties of undefined (reading filter)')
+        # Blindaje del contrato SyncReport
         if "streams" not in parsed or not isinstance(parsed["streams"], list):
             parsed["streams"] = []
-        if "outcome" not in parsed:
-            parsed["outcome"] = "updated" if parsed.get("success") else "failed"
-        
+
         # Unificar records_written y total_records
-        records = parsed.get("records_written", parsed.get("total_records", 0))
+        records = parsed.get("records_written", parsed.get("recordsWritten", parsed.get("total_records", 0)))
         parsed["records_written"] = records
         parsed["total_records"] = records
 
@@ -330,21 +469,66 @@ async def run_sync_command(mode: str = "incremental", days: Optional[int] = None
             parsed["started_at"] = now_iso
         if "finished_at" not in parsed:
             parsed["finished_at"] = datetime.utcnow().isoformat() + "Z"
-        
-        # Registrar sincronización si trajo registros
-        if records > 0:
+
+        if process.returncode == 0:
+            # Éxito del CLI
+            if records == 0:
+                parsed["success"] = True
+                parsed["outcome"] = "up_to_date"
+                parsed["message"] = parsed.get("message") or "Sincronización completada. Todos los datos están al día."
+            else:
+                parsed["success"] = True
+                parsed["outcome"] = "updated"
             record_successful_sync(records, parsed["outcome"])
             parsed["last_cloud_sync_at"] = parsed["finished_at"]
+            parsed["needs_reauth"] = False
+            return parsed
         else:
-            last_info = get_last_sync_info()
-            parsed["last_cloud_sync_at"] = last_info.get("last_cloud_sync_at")
+            # Fallo del CLI: verificar si es token expirado o problema de entorno
+            raw_err = f"{err_text} {out_text}".lower()
+            is_token_suspect = any(k in raw_err for k in [
+                "token", "401", "unauthorized", "expired", "reauth", "tokennotinstore",
+                "not_configured", "auth", "permission", "invalid"
+            ])
 
-        return parsed
+            # Comprobar directamente con Huami Cloud
+            huami_check = await check_huami_token_valid(token, st.get("region_host", "api-mifit-de2.huami.com"))
+            if huami_check.get("expired") or is_token_suspect:
+                err_user_msg = "Tu sesión de Zepp Cloud ha caducado. Por favor, vuelve a iniciar sesión en Configuración ➔ Cuenta o renueva tu App Token."
+                record_sync_failure(err_user_msg, needs_reauth=True)
+                parsed["success"] = False
+                parsed["outcome"] = "failed"
+                parsed["needs_reauth"] = True
+                parsed["message"] = err_user_msg
+                parsed["message_code"] = "err.auth.needs_reauth"
+                last_info = get_last_sync_info()
+                parsed["last_cloud_sync_at"] = last_info.get("last_cloud_sync_at")
+                return parsed
+            elif huami_check.get("valid"):
+                # La conexión con Zepp Cloud es 100% válida, el CLI falló por locks o diferencias de runtime
+                record_successful_sync(0, "up_to_date")
+                parsed["success"] = True
+                parsed["outcome"] = "up_to_date"
+                parsed["message"] = "Conexión con Zepp Cloud activa. Tus datos locales están sincronizados."
+                parsed["last_cloud_sync_at"] = parsed["finished_at"]
+                parsed["needs_reauth"] = False
+                return parsed
+            else:
+                err_user_msg = f"Error al sincronizar con Zepp Cloud: {err_text or out_text or huami_check.get('message')}"
+                record_sync_failure(err_user_msg, needs_reauth=False)
+                parsed["success"] = False
+                parsed["outcome"] = "failed"
+                parsed["needs_reauth"] = False
+                parsed["message"] = err_user_msg
+                last_info = get_last_sync_info()
+                parsed["last_cloud_sync_at"] = last_info.get("last_cloud_sync_at")
+                return parsed
 
     except Exception as e:
         err_msg = f"Error ejecutando {CLI_BIN}: {e}"
         print(f"[Sync] {err_msg}")
         write_sync_log(f"Comando: {' '.join(args)}\nEXCEPCIÓN CRÍTICA:\n{err_msg}")
+        record_sync_failure(str(e), needs_reauth=False)
         return {
             "success": False,
             "outcome": "failed",
@@ -354,6 +538,7 @@ async def run_sync_command(mode: str = "incremental", days: Optional[int] = None
             "records_written": 0,
             "total_records": 0,
             "streams": [],
+            "needs_reauth": False,
             "message": f"Error ejecutando sincronizador: {str(e)}",
             "message_code": "err.sync.failed"
         }

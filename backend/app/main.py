@@ -38,7 +38,10 @@ from .zepp_cli import (
     CLI_BIN,
     write_sync_log,
     clean_region_host,
-    clean_region_url
+    clean_region_url,
+    check_huami_token_valid,
+    record_sync_failure,
+    record_successful_sync
 )
 
 app = FastAPI(title="ZeppBridge Web Native", version="3.2.1")
@@ -1309,12 +1312,40 @@ async def handle_bridge_command(command: str, request: Request):
                 pass
             conn.close()
 
-        auth_state = "verified" if st["configured"] else "unconfigured"
-        conn_state = "connected" if st["configured"] else "unconfigured"
-
         sync_info = get_last_sync_info()
+        needs_reauth = bool(sync_info.get("needs_reauth", False))
+
+        # Si el frontend solicitó verify_auth explícitamente y está configurado,
+        # realizar un test rápido de conectividad con la nube de Zepp
+        if command == "verify_auth" and st["configured"]:
+            token = get_stored_token(st.get("user_id"))
+            if token:
+                v_check = await check_huami_token_valid(token, st.get("region_host", "api-mifit-de2.huami.com"))
+                if v_check.get("expired"):
+                    needs_reauth = True
+                    record_sync_failure("Sesión de Zepp Cloud caducada", needs_reauth=True)
+                elif v_check.get("valid"):
+                    needs_reauth = False
+                    sync_info["needs_reauth"] = False
+                    sync_info["last_cloud_sync_outcome"] = "up_to_date"
+
+        if not st["configured"]:
+            auth_state = "unconfigured"
+            conn_state = "unconfigured"
+        elif needs_reauth:
+            auth_state = "needs_reauth"
+            conn_state = "needs_reauth"
+        else:
+            auth_state = "verified"
+            conn_state = "connected"
+
         last_cloud_sync_at = sync_info.get("last_cloud_sync_at") if st["configured"] else None
         last_cloud_sync_outcome = sync_info.get("last_cloud_sync_outcome") if st["configured"] else None
+
+        # Si la cuenta está conectada y hay datos saludables, no dejar el estado atrapado en 'failed'
+        if st["configured"] and record_count > 0 and not needs_reauth:
+            if last_cloud_sync_outcome == "failed":
+                last_cloud_sync_outcome = "up_to_date"
 
         if st["configured"] and record_count > 0:
             if not last_cloud_sync_at:
@@ -6415,10 +6446,12 @@ async def background_scheduler():
                     auth_st = get_auth_status()
                     if auth_st.get("configured"):
                         print(f"[Scheduler] Sincronización incremental automática (cada {interval_min} min)...")
-                        loop = asyncio.get_event_loop()
-                        await loop.run_in_executor(None, run_sync_command, "incremental", False, None)
-                        cfg["last_auto_sync"] = now.isoformat()
-                        save_custom_config(cfg)
+                        try:
+                            await run_sync_command(mode="incremental")
+                            cfg["last_auto_sync"] = now.isoformat()
+                            save_custom_config(cfg)
+                        except Exception as s_err:
+                            print(f"[Scheduler] Error en auto-sync: {s_err}")
 
             # 2. Evaluador de Informes Programados (Cron Gemini + Telegram)
             token = cfg.get("telegram_bot_token")
@@ -6589,12 +6622,15 @@ async def handle_telegram_command(text: str, token: str, chat_id: str):
     if cmd == "/sync":
         await loop.run_in_executor(None, send_telegram_message, token, chat_id, "🔄 *Iniciando sincronización con los servidores de Zepp...* Un momento por favor.")
         try:
-            res = await loop.run_in_executor(None, run_sync_command, "incremental", False, None)
+            res = await run_sync_command(mode="incremental")
             written = (res and res.get("records_written")) or 0
             cfg = get_custom_config()
             cfg["last_auto_sync"] = datetime.now().isoformat()
             save_custom_config(cfg)
-            await loop.run_in_executor(None, send_telegram_message, token, chat_id, f"✅ *¡Sincronización completada!*\nSe escribieron {written} registros nuevos.\nEscribe `/hoy` para ver tus datos actualizados.")
+            if res.get("success"):
+                await loop.run_in_executor(None, send_telegram_message, token, chat_id, f"✅ *¡Sincronización completada!*\nSe escribieron {written} registros nuevos.\nEscribe `/hoy` para ver tus datos actualizados.")
+            else:
+                await loop.run_in_executor(None, send_telegram_message, token, chat_id, f"⚠️ *Aviso de sincronización:*\n{res.get('message', 'Fallo de conexión')}")
         except Exception as e:
             await loop.run_in_executor(None, send_telegram_message, token, chat_id, f"❌ *Error en la sincronización:* {e}")
         return

@@ -392,19 +392,51 @@ const toggleMorningDay = (d: string) => {
   cfg.value.morning_report.days_of_week = arr;
 };
 
+const runIncrementalSyncNow = async () => {
+  syncing.value = true;
+  syncResult.value = null;
+  try {
+    const res = await (window as any).__TAURI_INTERNALS__?.invoke('start_incremental_sync');
+    if (res && res.success === false) {
+      syncResult.value = {
+        ok: false,
+        message: '❌ ' + (res.message || 'Error en la sincronización con Zepp Cloud')
+      };
+    } else {
+      const count = (res && (res.records_written || res.total_records)) ?? 0;
+      syncResult.value = {
+        ok: true,
+        message: '✅ Sincronización completada con éxito (' + count + ' registros nuevos).',
+        count
+      };
+    }
+  } catch (err: any) {
+    syncResult.value = { ok: false, message: '❌ Error: ' + (err?.message || err) };
+  } finally {
+    syncing.value = false;
+  }
+};
+
 const runHistorySync = async () => {
   syncing.value = true;
   syncResult.value = null;
   try {
     const res = await (window as any).__TAURI_INTERNALS__?.invoke('start_history_sync', { days: 180 });
-    const count = (res && (res.records_written || res.total_records)) ?? 0;
-    syncResult.value = {
-      ok: true,
-      message: 'Sincronización de 180 días completada con éxito (' + count + ' registros escritos).',
-      count
-    };
+    if (res && res.success === false) {
+      syncResult.value = {
+        ok: false,
+        message: '❌ ' + (res.message || 'Error en la sincronización de 180 días')
+      };
+    } else {
+      const count = (res && (res.records_written || res.total_records)) ?? 0;
+      syncResult.value = {
+        ok: true,
+        message: '✅ Sincronización de 180 días completada con éxito (' + count + ' registros escritos).',
+        count
+      };
+    }
   } catch (err: any) {
-    syncResult.value = { ok: false, message: 'Error: ' + (err?.message || err) };
+    syncResult.value = { ok: false, message: '❌ Error: ' + (err?.message || err) };
   } finally {
     syncing.value = false;
   }
@@ -883,13 +915,17 @@ onMounted(() => {
         <div class="s-row is-block">
           <div class="custom-row-head">
             <div class="s-row-main">
-              <span class="s-row-title">Sincronización Profunda de Historial (180 días)</span>
-              <span class="s-row-sub">Descarga todo tu historial completo de entrenamientos, sueño y pulsaciones de 6 meses.</span>
+              <span class="s-row-title">Sincronización Manual Inmediata</span>
+              <span class="s-row-sub">Sincroniza directamente con los servidores de Zepp Cloud para actualizar al momento los datos más recientes o tu historial.</span>
             </div>
-            <div class="s-row-control">
+            <div class="s-row-control" style="gap: 8px; display: flex; flex-wrap: wrap;">
+              <button class="pill-button" type="button" :disabled="syncing" @click="runIncrementalSyncNow">
+                <Icon name="cloud" :size="14" />
+                {{ syncing ? 'Sincronizando...' : '🔄 Sincronizar Ahora' }}
+              </button>
               <button class="pill-button" type="button" :disabled="syncing" @click="runHistorySync">
                 <Icon name="cloud" :size="14" />
-                {{ syncing ? 'Sincronizando 180 días...' : '🔄 Sincronizar 180 días' }}
+                {{ syncing ? 'Sincronizando 180 días...' : '🔄 Historial (180 días)' }}
               </button>
             </div>
           </div>

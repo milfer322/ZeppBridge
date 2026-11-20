@@ -423,8 +423,29 @@
           }
         }
 
-        // Si es una sincronización completada, emitir evento para refrescar la interfaz
-        if (command.includes('sync') && data && data.success) {
+        // Si es una sincronización con Zepp Cloud, feedback mediante toast y evento
+        if (command === 'start_incremental_sync' || command === 'start_history_sync' || command === 'start_initial_sync') {
+          if (data && data.success) {
+            const count = data.records_written ?? data.total_records ?? 0;
+            const msg = count > 0 
+              ? `✅ Sincronización completada: ${count} registros actualizados de Zepp Cloud.`
+              : `✅ Sincronización completada: tus datos locales ya estaban al día.`;
+            showToast(msg, 'success', 4500);
+            emitClientEvent('sync://progress', {
+              completed: true,
+              stream: 'all',
+              current: 100,
+              total: 100,
+              message: 'Sincronización completada'
+            });
+          } else if (data && !data.success) {
+            if (data.needs_reauth || data.message_code === 'err.auth.needs_reauth') {
+              showToast('⚠️ Tu sesión de Zepp Cloud ha caducado. Por favor, ve a Configuración ➔ Cuenta para renovar tu token.', 'error', 9000);
+            } else {
+              showToast('⚠️ Error al sincronizar con Zepp Cloud: ' + (data.message || 'Fallo de conexión'), 'warning', 6000);
+            }
+          }
+        } else if (command.includes('sync') && data && data.success) {
           emitClientEvent('sync://progress', {
             completed: true,
             stream: 'all',
