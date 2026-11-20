@@ -10,6 +10,8 @@ import urllib.parse
 import urllib.request
 import urllib.error
 import subprocess
+import httpx
+import math
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, Any, List, Optional
@@ -804,6 +806,383 @@ def build_ai_health_prompt(prompt_query: str = "", task_dict: dict = None, scope
     )
     
     return "\n".join(sections)
+
+
+# ==============================================================================
+# DECODIFICADOR Y DESCARGADOR DE SERIES DE FUERZA (ZEPP CLOUD & GIMNASIO)
+# ==============================================================================
+
+LB_TO_KG = 0.45359237
+
+STRENGTH_ACTION_CATALOG: Dict[int, tuple] = {
+    0: ("free_exercise", None),
+    1: ("bodyweight_squats", "legs"),
+    2: ("straight_arm_front_squats", "legs"),
+    3: ("barbell_squats", "legs"),
+    4: ("triceps_pushdowns", "triceps"),
+    5: ("bent_over_row", "back"),
+    6: ("bench_press", "chest"),
+    7: ("sit_up_holds", "core"),
+    8: ("knee_touch_sit_ups", "core"),
+    9: ("dumbbell_flys", "chest"),
+    10: ("burpee_jumps", "legs"),
+    11: ("burpees", "legs"),
+    12: ("overhead_tricep_extensions", "triceps"),
+    13: ("lying_tricep_extensions", "triceps"),
+    14: ("lateral_raises", "shoulders"),
+    15: ("jumping_jacks", "legs"),
+    16: ("incline_dumbbell_row", "back"),
+    17: ("bent_over_dumbbell_row", "back"),
+    18: ("bent_over_barbell_row", "back"),
+    19: ("single_arm_dumbbell_row_left", "back"),
+    20: ("single_arm_dumbbell_row_right", "back"),
+    21: ("dumbbell_supine_triceps_extensions", "triceps"),
+    22: ("supine_triceps_extensions", "triceps"),
+    23: ("dumbbell_single_arm_triceps_extensions_left", "triceps"),
+    24: ("seated_bent_over_dumbbell_triceps_extensions", "triceps"),
+    25: ("seated_triceps_press", "triceps"),
+    26: ("smith_machine_squats", "legs"),
+    30: ("dumbbell_bench_press", "chest"),
+    32: ("smith_machine_bench_press", "chest"),
+    33: ("dumbbell_single_arm_triceps_extensions_right", "triceps"),
+    34: ("incline_dumbbell_flys", "chest"),
+    35: ("decline_dumbbell_flys", "chest"),
+    37: ("v_bar_tricep_pushdowns", "triceps"),
+    38: ("rope_triceps_pushdowns", "triceps"),
+    39: ("elastic_band_lateral_raise", "shoulders"),
+    40: ("dumbbell_lateral_raise", "shoulders"),
+    41: ("dumbbell_front_raise", "shoulders"),
+    42: ("pectoral_muscles", "chest"),
+    43: ("rectus_abdominis", "core"),
+    44: ("external_oblique", "core"),
+    45: ("upper_back_muscles", "back"),
+    46: ("lower_back_muscles", "back"),
+    47: ("lateral_back_muscles", "back"),
+    48: ("shoulder_muscles", "shoulders"),
+    49: ("neck_muscles", "shoulders"),
+    50: ("upper_arm_front_muscles", "biceps"),
+    51: ("upper_arm_back_muscles", "triceps"),
+    52: ("front_forearm_muscles", "forearms"),
+    53: ("back_forearm_muscles", "forearms"),
+    54: ("hip_muscles", "glutes"),
+    55: ("quadriceps", "legs"),
+    56: ("hamstrings", "legs"),
+    57: ("front_calf_muscles", "legs"),
+    58: ("back_calf_muscles", "legs"),
+    60: ("lat_pulldowns", "back"),
+    61: ("deadlift", "legs"),
+    62: ("push_up", "chest"),
+    63: ("shoulder_press", "shoulders"),
+    64: ("pull_up", "back"),
+    65: ("biceps_curl", "biceps"),
+    66: ("seated_cable_row", "back"),
+    67: ("upright_row", "shoulders"),
+    68: ("straight_arm_pulldown", "back"),
+    69: ("russian_twist", "core"),
+    70: ("barbell_deadlift", "legs"),
+    71: ("assisted_push_up", "chest"),
+    72: ("dumbbell_push_press", "shoulders"),
+    73: ("dumbbell_upright_row", "shoulders"),
+    74: ("neck_pulldown", "back"),
+    75: ("chin_up", "back"),
+    76: ("dumbbell_biceps_curl", "biceps"),
+    77: ("t_bar_row", "back"),
+    78: ("kettlebell_deadlift", "legs"),
+    79: ("incline_bench_press", "chest"),
+    80: ("decline_bench_press", "chest"),
+    81: ("close_grip_bench_press", "chest"),
+    82: ("cable_crossover", "chest"),
+    83: ("chest_dips", "chest"),
+    84: ("dumbbell_pullover", "chest"),
+    85: ("preacher_curl", "biceps"),
+    86: ("concentration_curl", "biceps"),
+    87: ("hammer_curl", "biceps"),
+    88: ("incline_dumbbell_curl", "biceps"),
+    89: ("cable_curl", "biceps"),
+    90: ("arnold_press", "shoulders"),
+    91: ("rear_delt_fly", "shoulders"),
+    92: ("face_pull", "shoulders"),
+    93: ("shrug", "back"),
+    94: ("leg_press", "legs"),
+    95: ("leg_extension", "legs"),
+    96: ("leg_curl", "legs"),
+    97: ("calf_raise", "legs"),
+    98: ("seated_calf_raise", "legs"),
+    99: ("standing_calf_raise", "legs"),
+    100: ("romanian_deadlift", "legs"),
+    101: ("lunges", "legs"),
+    102: ("hip_thrust", "glutes"),
+    103: ("glute_bridge", "glutes"),
+    104: ("cable_kickback", "glutes"),
+    105: ("hanging_leg_raise", "core"),
+    106: ("ab_wheel_rollout", "core"),
+    107: ("plank", "core"),
+    108: ("side_plank", "core"),
+    109: ("cable_woodchopper", "core"),
+    110: ("wrist_curl", "forearms"),
+    111: ("reverse_wrist_curl", "forearms"),
+    112: ("farmers_walk", "forearms"),
+    113: ("good_morning", "back"),
+    114: ("hyperextension", "back"),
+    115: ("cable_pull_through", "glutes"),
+    116: ("sumo_deadlift", "legs"),
+    117: ("front_squat", "legs"),
+    118: ("hack_squat", "legs"),
+    119: ("pec_deck", "chest"),
+    120: ("reverse_pec_deck", "shoulders"),
+    121: ("skull_crusher", "triceps"),
+    122: ("dips", "triceps"),
+    123: ("cable_crunch", "core"),
+    124: ("mountain_climbers", "core"),
+    125: ("bulgarian_split_squat", "legs"),
+    126: ("goblet_squat", "legs"),
+    127: ("step_up", "legs"),
+    128: ("box_jump", "legs"),
+    129: ("ab_crunch", "core"),
+    130: ("bicycle_crunch", "core"),
+}
+
+def parse_strength_sets_from_lap(lap_text: str, workout_id: str) -> List[Dict[str, Any]]:
+    if not lap_text or not isinstance(lap_text, str):
+        return []
+    sets = []
+    set_index = 1
+    rows = [r.strip() for r in lap_text.split(";") if r.strip()]
+    for row in rows:
+        cols = row.split(",")
+        if len(cols) < 29:
+            continue
+        try:
+            int(cols[0].strip())
+        except Exception:
+            continue
+
+        def get_int(idx):
+            if idx < len(cols):
+                val = cols[idx].strip()
+                try:
+                    return int(val)
+                except Exception:
+                    pass
+            return None
+
+        def get_float(idx):
+            if idx < len(cols):
+                val = cols[idx].strip()
+                try:
+                    v = float(val)
+                    if math.isfinite(v):
+                        return v
+                except Exception:
+                    pass
+            return None
+
+        action_code = get_int(28)
+        reps = get_int(22)
+        unit_code = get_int(23)
+        weight_raw = get_float(21)
+        ms_raw = get_int(43) or -1
+        sec_int = get_int(1) or -1
+
+        if (action_code is None or action_code < 0) and (reps is None or reps == 0) and (weight_raw is None or weight_raw <= 0):
+            continue
+
+        action_code = action_code if action_code is not None else -1
+        reps = reps if reps is not None else 0
+        weight_unit = "lb" if unit_code == 1 else "kg"
+        
+        weight_value = None
+        weight_kg = None
+        if weight_raw is not None and weight_raw > 0 and weight_raw <= 2000.0:
+            weight_value = round(weight_raw, 2)
+            if unit_code == 1:
+                weight_kg = round(weight_raw * LB_TO_KG, 3)
+            else:
+                weight_kg = round(weight_raw, 3)
+
+        duration_ms = None
+        if ms_raw > 0 and ms_raw <= 3600000:
+            duration_ms = ms_raw
+        elif sec_int > 0 and sec_int <= 3600:
+            duration_ms = sec_int * 1000
+
+        avg_hr = get_int(11)
+        if avg_hr is not None and (avg_hr <= 0 or avg_hr > 255):
+            avg_hr = None
+
+        calories_raw = get_float(14)
+        calories_kcal = round(calories_raw, 1) if calories_raw is not None and calories_raw >= 0 else None
+
+        ex_key, m_group = STRENGTH_ACTION_CATALOG.get(action_code, (None, None))
+
+        sets.append({
+            "workout_id": workout_id,
+            "set_index": set_index,
+            "action_code": action_code,
+            "exercise_key": ex_key,
+            "muscle_group": m_group,
+            "reps": reps,
+            "weight_value": weight_value,
+            "weight_unit": weight_unit,
+            "weight_kg": weight_kg,
+            "duration_ms": duration_ms,
+            "avg_hr": avg_hr,
+            "calories_kcal": calories_kcal
+        })
+        set_index += 1
+
+    return sets
+
+async def fetch_and_store_strength_workout(wid: str) -> bool:
+    """Descarga e inserta las series de fuerza para un entrenamiento de forma directa y garantizada."""
+    conn = get_db_connection()
+    if not conn:
+        return False
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS workout_strength_sets (
+                workout_id TEXT NOT NULL,
+                set_index INTEGER NOT NULL,
+                action_code INTEGER NOT NULL,
+                exercise_key TEXT,
+                muscle_group TEXT,
+                reps INTEGER NOT NULL,
+                weight_value REAL,
+                weight_unit TEXT NOT NULL,
+                weight_kg REAL,
+                duration_ms INTEGER,
+                avg_hr INTEGER,
+                calories_kcal REAL
+            )
+        """)
+        conn.execute("UPDATE workouts SET zepp_source = 'run.huami.com' WHERE workout_id = ? AND (zepp_source IS NULL OR TRIM(zepp_source) = '')", (wid,))
+        conn.commit()
+
+        # 1. Intentar mediante CLI oficial
+        try:
+            await run_workout_details_command(max_items=40, retry_failed=True)
+        except Exception as e:
+            print(f"[StrengthSync] Aviso ejecutando CLI workout-details: {e}")
+
+        c = conn.execute("SELECT count(*) as c FROM workout_strength_sets WHERE workout_id = ?", (wid,)).fetchone()
+        if c and c["c"] > 0:
+            return True
+
+        # 2. Descarga directa desde la API de Zepp Cloud
+        st = get_auth_status()
+        user_id = st.get("user_id")
+        token = get_stored_token(user_id)
+        if not token:
+            print("[StrengthSync] No hay app_token disponible para descarga cloud directa.")
+            return False
+
+        region_host = st.get("region_host") or "api-mifit-de2.huami.com"
+        headers = {
+            "apptoken": token,
+            "appname": "com.huami.midong",
+            "appplatform": "ios_phone",
+            "accept": "*/*",
+            "v": "2.0",
+            "vn": "10.2.5",
+            "cv": "1722_10.2.5",
+            "vb": "202604132257",
+            "lang": "es",
+            "timezone": "UTC"
+        }
+
+        w = conn.execute("SELECT zepp_source FROM workouts WHERE workout_id = ?", (wid,)).fetchone()
+        sources_to_try = []
+        if w and w["zepp_source"]:
+            sources_to_try.append(w["zepp_source"])
+        for s in ("run.huami.com", "huami", "official", "run.gps"):
+            if s not in sources_to_try:
+                sources_to_try.append(s)
+
+        data = None
+        for src in sources_to_try:
+            url = f"https://{region_host}/v1/sport/run/detail.json"
+            try:
+                async with httpx.AsyncClient(timeout=15.0) as client:
+                    resp = await client.get(url, params={"trackid": str(wid), "source": src}, headers=headers)
+                    if resp.status_code == 200:
+                        rj = resp.json()
+                        payload = rj.get("data") if isinstance(rj, dict) and isinstance(rj.get("data"), dict) else rj
+                        if payload and (payload.get("lap") or payload.get("strengthSets") or payload.get("strengthAssess")):
+                            data = payload
+                            print(f"[StrengthSync] Detalle obtenido con éxito desde {src} para {wid}")
+                            break
+            except Exception as e:
+                print(f"[StrengthSync] Error consultando {src}: {e}")
+
+        if not data:
+            return False
+
+        sets = parse_strength_sets_from_lap(data.get("lap") or "", wid)
+        if not sets and data.get("strengthSets"):
+            try:
+                raw_sets = data.get("strengthSets")
+                if isinstance(raw_sets, str):
+                    raw_sets = json.loads(raw_sets)
+                if isinstance(raw_sets, list):
+                    for idx, s in enumerate(raw_sets, start=1):
+                        ac = int(s.get("actionType") or s.get("action_type") or 0)
+                        reps = int(s.get("reps") or s.get("count") or 0)
+                        weight = float(s.get("weight") or 0) if s.get("weight") else None
+                        ex_key, m_group = STRENGTH_ACTION_CATALOG.get(ac, (None, None))
+                        sets.append({
+                            "workout_id": wid,
+                            "set_index": idx,
+                            "action_code": ac,
+                            "exercise_key": ex_key,
+                            "muscle_group": m_group,
+                            "reps": reps,
+                            "weight_value": weight,
+                            "weight_unit": "kg",
+                            "weight_kg": weight,
+                            "duration_ms": None,
+                            "avg_hr": None,
+                            "calories_kcal": None
+                        })
+            except Exception as e:
+                print(f"[StrengthSync] Error parseando strengthSets alternativo: {e}")
+
+        if sets:
+            conn.execute("DELETE FROM workout_strength_sets WHERE workout_id = ?", (wid,))
+            for s in sets:
+                conn.execute(
+                    """INSERT INTO workout_strength_sets
+                       (workout_id, set_index, action_code, exercise_key, muscle_group, reps, weight_value, weight_unit, weight_kg, duration_ms, avg_hr, calories_kcal)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (s["workout_id"], s["set_index"], s["action_code"], s["exercise_key"], s["muscle_group"],
+                     s["reps"], s["weight_value"], s["weight_unit"], s["weight_kg"], s["duration_ms"], s["avg_hr"], s["calories_kcal"])
+                )
+
+            try:
+                raw_payload = json.dumps(data)
+                conn.execute(
+                    """INSERT OR REPLACE INTO raw_records (stream, source_key, payload, created_at)
+                       VALUES ('workout_detail', 'workout_detail:' || ? || ':run.huami.com', ?, datetime('now'))""",
+                    (wid, raw_payload)
+                )
+            except Exception:
+                pass
+
+            tot_sets = len(sets)
+            tot_reps = sum(s["reps"] for s in sets)
+            conn.execute(
+                "UPDATE workouts SET strength_total_sets = ?, strength_total_reps = ? WHERE workout_id = ?",
+                (tot_sets, tot_reps, wid)
+            )
+            conn.commit()
+            print(f"[StrengthSync] Guardadas {len(sets)} series de fuerza para {wid}")
+            return True
+
+        return False
+    except Exception as e:
+        print(f"[StrengthSync] Excepción al descargar fuerza: {e}")
+        return False
+    finally:
+        conn.close()
 
 # ==============================================================================
 # DISPATCHER CENTRAL: /api/bridge/{command}
@@ -2189,7 +2568,7 @@ async def handle_bridge_command(command: str, request: Request):
         if not strength_rows and w and (str(w.get("workout_type")) in ("52", "strength") or w.get("workout_type_override") == "strength" or w.get("strength_total_sets")):
             try:
                 print(f"[WorkoutSeries] Entrenamiento de fuerza sin series locales ({wid}). Descargando detalles desde la nube...")
-                await run_workout_details_command(max_items=40)
+                await fetch_and_store_strength_workout(str(wid))
                 strength_rows = query_all(
                     "SELECT set_index, action_code, exercise_key, muscle_group, reps, weight_value, weight_unit, weight_kg, duration_ms, avg_hr, calories_kcal "
                     "FROM workout_strength_sets WHERE workout_id = ? ORDER BY set_index ASC",
@@ -5161,16 +5540,28 @@ async def handle_bridge_command(command: str, request: Request):
         channel = body.get("channel") if isinstance(body, dict) else None
         retry_failed = bool(body.get("retryFailed", False)) if isinstance(body, dict) else False
         max_records = int(body.get("maxRecords", 40)) if isinstance(body, dict) else 40
+        wid = (body.get("workout_id") or body.get("workoutId")) if isinstance(body, dict) else None
         if command in ("start_workout_detail_backfill", "sync_workout_details"):
             try:
-                res_cov = await run_workout_details_command(channel=channel, max_items=max_records, retry_failed=retry_failed)
-                if command == "sync_workout_details":
+                if wid:
+                    ok = await fetch_and_store_strength_workout(str(wid))
+                    res_cov = get_workout_detail_coverage_db(channel or "advanced")
+                    return {
+                        "success": ok,
+                        "coverage": res_cov,
+                        "message": "Series y pesos del entrenamiento descargados correctamente" if ok else "No se encontraron nuevas series en la nube"
+                    }
+                else:
+                    try:
+                        execute_write("UPDATE workouts SET zepp_source = 'run.huami.com' WHERE zepp_source IS NULL OR TRIM(zepp_source) = ''")
+                    except Exception:
+                        pass
+                    res_cov = await run_workout_details_command(channel=channel, max_items=max_records, retry_failed=retry_failed)
                     return {
                         "success": True,
                         "coverage": res_cov,
                         "message": "Detalles y series de fuerza descargados correctamente"
                     }
-                return res_cov
             except Exception as e:
                 print(f"[Backfill] Error ejecutando workout-details: {e}")
         return get_workout_detail_coverage_db(channel or "advanced")

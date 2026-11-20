@@ -37,6 +37,7 @@
   // Asegurar vista de panel completo (Dashboard / Todas las tarjetas) en entrenamientos
   try {
     localStorage.setItem('zeppbridge-workout-stage:v1:view', 'classic');
+    localStorage.removeItem('zeppbridge-workout-stage:v2:strength');
   } catch (e) {}
 
   // Sincronizar descarte de ofertas de recuperación si el backend ya tiene cobertura completa
@@ -434,6 +435,10 @@
         }
 
         // Si es un reproceso local de datos, mostrar toast explicativo y emitir evento
+        if (command === 'sync_workout_details') {
+          showToast('✅ Series y pesos de fuerza sincronizados correctamente de Zepp Cloud.', 'success', 5000);
+        }
+
         if (command === 'reprocess_local_data') {
           const total = data ? (data.total_records ?? data.totalRecords ?? 0) : 0;
           showToast(`✅ Análisis local finalizado: ${total} registros reprocesados con éxito.`, 'success', 5000);

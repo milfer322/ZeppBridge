@@ -527,6 +527,34 @@ onMounted(() => {
       </div>
     </section>
 
+    <!-- SECCIÓN 🏋️ DESCARGA DE SERIES Y PESOS DE FUERZA (GIMNASIO) -->
+    <section class="s-section" style="border: 1px solid rgba(56, 189, 248, 0.35); border-radius: 12px; padding: 14px 16px; background: rgba(56, 189, 248, 0.05); margin-bottom: 16px;">
+      <div class="s-section-head">
+        <h3 style="color: var(--accent, #38bdf8); display: flex; align-items: center; gap: 8px;">
+          <Icon name="activity" :size="18" /> 🏋️ Series y Pesos de Fuerza (Gimnasio)
+        </h3>
+        <p class="s-row-sub" style="margin: 2px 0 0 0;">Descarga desde los servidores de Zepp Cloud las repeticiones por serie, pesos en kg, pausas y ejercicios de todos tus entrenamientos de fuerza.</p>
+      </div>
+      <div class="s-list" style="margin-top: 10px;">
+        <div class="s-row">
+          <div class="s-row-main">
+            <span class="s-row-title">Descargar Series de Fuerza Completas</span>
+            <span class="s-row-sub">Sincroniza el desglose completo de series y pesos para ver las tablas y el mapa muscular anatómico.</span>
+          </div>
+          <div class="s-row-control">
+            <button class="pill-button" type="button" :disabled="fetchingStrengthDetails" @click="runStrengthDetailsSync" style="background: var(--accent, #0ea5e9); color: #fff; font-weight: 600; padding: 8px 16px;">
+              <Icon name="activity" :size="14" />
+              {{ fetchingStrengthDetails ? 'Descargando series...' : '🏋️ Descargar Series de Fuerza' }}
+            </button>
+          </div>
+        </div>
+        <div v-if="strengthDetailsResult" :class="['alert', strengthDetailsResult.ok ? 'success' : 'danger']" style="margin-top: 10px;">
+          <Icon :name="strengthDetailsResult.ok ? 'circle-check' : 'warning'" :size="15" />
+          <span>{{ strengthDetailsResult.message }}</span>
+        </div>
+      </div>
+    </section>
+
     <!-- SECCIÓN DEPORTES Y PLANIFICADOR DE ENTRENAMIENTOS -->
     <section class="s-section">
       <div class="s-section-head">
@@ -1299,11 +1327,11 @@ if (fs.existsSync(settingsVuePath)) {
   let settingsCode = fs.readFileSync(settingsVuePath, 'utf8');
   settingsCode = settingsCode.replace(
     /sync:\s*.*?syncCard\.value\.cardTitle.*?,\r?\n/,
-    match => `${match}  custom: 'Custom e Informes',\n`
+    match => `${match}  custom: '🏋️ Docker & Herramientas Custom (Fuerza)',\n`
   );
   settingsCode = settingsCode.replace(
     "sync: autoSyncEnabled.value ? d.value.sumSyncOn(autoSyncInterval.value) : d.value.sumSyncOff,",
-    "sync: autoSyncEnabled.value ? d.value.sumSyncOn(autoSyncInterval.value) : d.value.sumSyncOff,\n    custom: 'Informes programados (cron), Telegram + Gemini, auto-sync (5m) y CSV',"
+    "sync: autoSyncEnabled.value ? d.value.sumSyncOn(autoSyncInterval.value) : d.value.sumSyncOff,\n    custom: 'Descarga de series y pesos de fuerza, Telegram, Gemini, cron y utilidades Docker',"
   );
   fs.writeFileSync(settingsVuePath, settingsCode, 'utf8');
   console.log('[Patch] Título y descripción de tarjeta custom integrados en src/views/Settings.vue');
@@ -1985,7 +2013,7 @@ if (fs.existsSync(stagePrefsPath)) {
   let spCode = fs.readFileSync(stagePrefsPath, 'utf8');
   spCode = spCode.replace(
     "try { return localStorage.getItem(VIEW_KEY) === 'classic' ? 'classic' : 'stage'; } catch { return 'stage'; }",
-    "try { return localStorage.getItem(VIEW_KEY) === 'stage' ? 'stage' : 'classic'; } catch { return 'classic'; }"
+    "try { const v = localStorage.getItem(VIEW_KEY); if (v !== 'classic') { localStorage.setItem(VIEW_KEY, 'classic'); } return 'classic'; } catch { return 'classic'; }"
   );
   fs.writeFileSync(stagePrefsPath, spCode, 'utf8');
   console.log('[Patch] Vista clásica Dashboard (Todas las tarjetas) establecida por defecto en src/lib/stage/prefs.ts');
@@ -2163,6 +2191,60 @@ if (fs.existsSync(maintSectionPath)) {
     msCode = msCode.replace(reparseRowTarget, feedbackAddition);
     fs.writeFileSync(maintSectionPath, msCode, 'utf8');
     console.log('[Patch] Feedback visual añadido en MaintenanceSection.vue para Volver a analizar');
+  }
+}
+
+
+// 27. Botón de descarga directa de series y pesos de fuerza en WorkoutDetail.vue
+const workoutDetailPath = 'src/views/WorkoutDetail.vue';
+if (fs.existsSync(workoutDetailPath)) {
+  let wdCode = fs.readFileSync(workoutDetailPath, 'utf8');
+  if (!wdCode.includes('syncStrengthDetail')) {
+    wdCode = wdCode.replace(
+      "import { computed, reactive } from 'vue';",
+      "import { computed, reactive, ref } from 'vue';"
+    );
+    const useWdTarget = '  loadDetail, exportRecord,\n} = useWorkoutDetail(workoutId);';
+    const syncFnAddition = `  loadDetail, exportRecord,
+} = useWorkoutDetail(workoutId);
+
+const syncingStrength = ref(false);
+const syncStrengthDetail = async () => {
+  if (syncingStrength.value) return;
+  syncingStrength.value = true;
+  try {
+    const caller = (window as any).__ZB_BRIDGE__?.call || (window as any).__TAURI__?.invoke || (window as any).__TAURI_INTERNALS__?.invoke;
+    if (caller) {
+      await caller('sync_workout_details', { workout_id: workoutId.value, retryFailed: true });
+    }
+    await loadDetail();
+  } catch (e) {
+    console.error('Error sincronizando series de fuerza:', e);
+  } finally {
+    syncingStrength.value = false;
+  }
+};`;
+    wdCode = wdCode.replace(useWdTarget, syncFnAddition);
+
+    const hintTarget = '<p v-if="workout.effective_type === \'strength\' && !series?.strength?.sets?.length" class="footnote">{{ tools.strengthHint }}</p>';
+    const buttonAddition = `<p v-if="workout.effective_type === 'strength' && !series?.strength?.sets?.length" class="footnote">{{ tools.strengthHint }}</p>
+          <div v-if="workout.effective_type === 'strength' && !series?.strength?.sets?.length" class="strength-backfill-prompt" style="margin: 12px 0 16px; padding: 14px 18px; background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 10px; display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap;">
+            <div style="flex: 1; min-width: 250px;">
+              <strong style="color: var(--ink, #fff); font-size: 14px; display: flex; align-items: center; gap: 6px;">
+                <Icon name="activity" :size="16" /> ¿Aún no ves las series ni los pesos de este entrenamiento?
+              </strong>
+              <p style="margin: 4px 0 0; font-size: 13px; color: var(--muted, #94a3b8); line-height: 1.4;">
+                Las repeticiones por serie, ejercicios y pesos en kg se descargan desde el informe de Zepp Cloud. Pulsa el botón para descargarlos ahora.
+              </p>
+            </div>
+            <button class="pill-button" type="button" :disabled="syncingStrength" @click="syncStrengthDetail" style="background: var(--accent, #0ea5e9); color: #fff; font-weight: 600; padding: 8px 18px; border: none; border-radius: 8px; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; box-shadow: 0 2px 8px rgba(14, 165, 233, 0.3);">
+              <Icon name="refresh" :size="15" />
+              {{ syncingStrength ? 'Descargando series...' : '🏋️ Descargar Series y Pesos Ahora' }}
+            </button>
+          </div>`;
+    wdCode = wdCode.replace(hintTarget, buttonAddition);
+    fs.writeFileSync(workoutDetailPath, wdCode, 'utf8');
+    console.log('[Patch] Botón de descarga de series y pesos añadido en WorkoutDetail.vue');
   }
 }
 
