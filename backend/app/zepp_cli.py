@@ -396,18 +396,62 @@ async def run_reprocess_command(force_all: bool = True) -> Dict[str, Any]:
             except Exception:
                 pass
 
-        if parsed:
+        if parsed and isinstance(parsed, dict):
+            # Normalizar nombres de claves (camelCase vs snake_case) para compatibilidad total con Tauri y CLI
+            streams = parsed.get("streams")
+            if not isinstance(streams, dict):
+                streams = {}
+                parsed["streams"] = streams
+
+            raw_count = parsed.get("raw_records") or parsed.get("rawRecords") or 0
+            total_count = (
+                parsed.get("total_records")
+                or parsed.get("totalRecords")
+                or sum(streams.values())
+                or raw_count
+            )
+            parsed["total_records"] = total_count
+            parsed["totalRecords"] = total_count
+            parsed["raw_records"] = raw_count
+            parsed["rawRecords"] = raw_count
+            parsed["ok"] = bool(parsed.get("ok", True))
+            parsed["replayed"] = bool(parsed.get("replayed", True))
+            parsed["message"] = (
+                parsed.get("message")
+                or f"Datos locales reprocesados correctamente ({total_count} registros normalizados con el nuevo motor v3.2.1)."
+            )
             return parsed
 
+        if process.returncode != 0:
+            err_msg = err_text or out_text or f"CLI finalizó con código {process.returncode}"
+            print(f"[Reprocess] Fallo en CLI: {err_msg}")
+            return {
+                "ok": False,
+                "total_records": 0,
+                "totalRecords": 0,
+                "raw_records": 0,
+                "rawRecords": 0,
+                "streams": {},
+                "message": f"Error al reprocesar datos: {err_msg}"
+            }
+
         return {
+            "ok": True,
             "total_records": 0,
+            "totalRecords": 0,
+            "raw_records": 0,
+            "rawRecords": 0,
             "streams": {},
             "message": out_text or err_text or "Reproceso completado"
         }
     except Exception as e:
         print(f"[Reprocess] Error al ejecutar: {e}")
         return {
+            "ok": False,
             "total_records": 0,
+            "totalRecords": 0,
+            "raw_records": 0,
+            "rawRecords": 0,
             "streams": {},
             "message": f"Error: {e}"
         }

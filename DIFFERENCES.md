@@ -145,6 +145,8 @@ flowchart TD
 
 ### 9. Experiencia Web Optimizada y Supresión de Onboarding
 * **Supresión Permanente de Tutoriales Invasivos:** En las versiones oficiales de ZeppBridge, cada actualización de versión o limpieza de estado local provocaba la reaparición repetitiva del tutorial emergente guiado (onboarding tour) en cada pantalla. Este fork inyecta el flag de finalización en el estado reactivo del frontend (`app-data-store`), manteniendo una experiencia limpia y sin interrupciones.
+* **Navegación Instantánea a 60 FPS:** Observador de mutaciones DOM desacoplado con debounce de 150 ms para evitar bloqueos del hilo principal de JavaScript al alternar entre las pestañas de navegación (Resumen, Entrenamientos, Planificador, Pasar a la IA, Configuración).
+* **Feedback Visual Inmediato al 'Volver a analizar':** Notificación Toast flotante en pantalla con el número exacto de registros procesados con el motor v3.2.1, aviso contextual directo bajo el botón en `MaintenanceSection.vue` y normalización bidireccional de nombres de campos (`total_records` y `totalRecords`).
 
 ---
 

@@ -168,6 +168,52 @@
 
   window.__ZB_EMIT__ = emitClientEvent;
 
+  // Sistema de notificaciones Toast visuales e inmediatas para la interfaz web
+  function showToast(message, type = 'info', durationMs = 4500) {
+    try {
+      let container = document.getElementById('zb-toast-container');
+      if (!container) {
+        container = document.createElement('div');
+        container.id = 'zb-toast-container';
+        container.style.cssText = 'position:fixed;bottom:24px;right:24px;z-index:999999;display:flex;flex-direction:column;gap:10px;pointer-events:none;';
+        document.body.appendChild(container);
+      }
+      const toast = document.createElement('div');
+      toast.className = 'zb-toast zb-toast-' + type;
+      toast.style.cssText = 'pointer-events:auto;min-width:280px;max-width:440px;padding:12px 18px;border-radius:10px;font-size:13.5px;line-height:1.45;font-weight:500;box-shadow:0 8px 24px rgba(0,0,0,0.55);transition:all 0.3s cubic-bezier(0.16,1,0.3,1);opacity:0;transform:translateY(16px);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;';
+      if (type === 'success') {
+        toast.style.background = '#1a3826';
+        toast.style.border = '1px solid #34a853';
+        toast.style.color = '#e6f4ea';
+      } else if (type === 'error') {
+        toast.style.background = '#3c1e20';
+        toast.style.border = '1px solid #ea4335';
+        toast.style.color = '#fce8e6';
+      } else {
+        toast.style.background = '#202124';
+        toast.style.border = '1px solid #5f6368';
+        toast.style.color = '#f1f3f4';
+      }
+      toast.textContent = message;
+      container.appendChild(toast);
+      requestAnimationFrame(() => {
+        toast.style.opacity = '1';
+        toast.style.transform = 'translateY(0)';
+      });
+      setTimeout(() => {
+        toast.style.opacity = '0';
+        toast.style.transform = 'translateY(16px)';
+        setTimeout(() => {
+          if (toast.parentNode) toast.parentNode.removeChild(toast);
+        }, 350);
+      }, durationMs);
+    } catch (e) {
+      console.log('[Toast]', message);
+    }
+  }
+
+  window.__ZB_TOAST__ = showToast;
+
   window.__ZB_IPC__ = {
     __zbDemo: false,
 
@@ -387,6 +433,19 @@
           });
         }
 
+        // Si es un reproceso local de datos, mostrar toast explicativo y emitir evento
+        if (command === 'reprocess_local_data') {
+          const total = data ? (data.total_records ?? data.totalRecords ?? 0) : 0;
+          showToast(`✅ Análisis local finalizado: ${total} registros reprocesados con éxito.`, 'success', 5000);
+          emitClientEvent('sync://progress', {
+            completed: true,
+            stream: 'all',
+            current: 100,
+            total: 100,
+            message: `Reproceso local finalizado: ${total} registros`
+          });
+        }
+
         // Si es una preparación de IA, almacenar y copiar el prompt enriquecido al portapapeles
         if (command === 'prepare_ai_handoff' || command === 'ai_task_prepare') {
           const pt = (data && (data.prompt_text || data.clipboardText)) || '';
@@ -408,6 +467,9 @@
 
         return data;
       } catch (err) {
+        if (command === 'reprocess_local_data') {
+          showToast(`❌ Error al volver a analizar los datos: ${err.message || err}`, 'error', 6000);
+        }
         if (command === 'get_app_status' || command === 'verify_auth') {
           try {
             const cached = localStorage.getItem('zb_last_app_status');
@@ -1019,43 +1081,8 @@
   }
 
   // ==============================================================================
-  // Diccionario y Tooltips de Información Técnica (HRV, RMSSD, SDNN, VO2max, etc.)
+  // Estilos de Insignias y Tooltips Técnicos (inyectados una sola vez)
   // ==============================================================================
-  const TECH_GLOSSARY = {
-    'hrv (rmssd)': 'HRV (RMSSD) · Root Mean Square of Successive Differences: Raíz cuadrada de las diferencias sucesivas entre latidos (ms). Refleja la actividad del sistema parasimpático y la capacidad de recuperación física frente al estrés.',
-    'vfc (rmssd)': 'VFC (RMSSD) · Raíz cuadrada de las diferencias sucesivas entre latidos (ms). Refleja la actividad del sistema parasimpático y la capacidad de recuperación física frente al estrés.',
-    'hrv (sdnn)': 'HRV (SDNN) · Standard Deviation of NN intervals: Desviación estándar de los intervalos entre latidos normales (ms). Evalúa la variabilidad cardíaca global y la adaptabilidad autonómica cardiovascular a lo largo del tiempo.',
-    'vfc (sdnn)': 'VFC (SDNN) · Desviación estándar de los intervalos entre latidos normales (ms). Evalúa la variabilidad cardíaca global y la adaptabilidad autonómica cardiovascular.',
-    'hrv': 'HRV / VFC · Variabilidad de la Frecuencia Cardíaca: Variación de tiempo en milisegundos entre latidos consecutivos. Un corazón sano no late a ritmo rígido; mayor variabilidad refleja un sistema nervioso autónomo descansado y resiliente.',
-    'vfc': 'VFC · Variabilidad de la Frecuencia Cardíaca: Variación de tiempo en milisegundos entre latidos consecutivos. Mayor variabilidad refleja un sistema nervioso autónomo descansado y resiliente.',
-    'vo2max': 'VO₂ Máx · Consumo Máximo de Oxígeno (ml/kg/min): Volumen máximo de oxígeno que tu cuerpo puede transportar y utilizar en esfuerzo extremo. Indicador clave de resistencia aeróbica y longevidad cardiorrespiratoria.',
-    'vo₂max': 'VO₂ Máx · Consumo Máximo de Oxígeno (ml/kg/min): Volumen máximo de oxígeno que tu cuerpo puede transportar y utilizar en esfuerzo extremo. Indicador clave de resistencia aeróbica y longevidad cardiorrespiratoria.',
-    'vo2 máx': 'VO₂ Máx · Consumo Máximo de Oxígeno (ml/kg/min): Volumen máximo de oxígeno que tu cuerpo puede transportar y utilizar en esfuerzo extremo.',
-    'vo₂ máx': 'VO₂ Máx · Consumo Máximo de Oxígeno (ml/kg/min): Volumen máximo de oxígeno que tu cuerpo puede transportar y utilizar en esfuerzo extremo.',
-    'umbral de lactato': 'Umbral de Lactato: Intensidad de carrera y pulso a partir del cual el ácido láctico se acumula en sangre más rápido de lo que los músculos pueden reciclarlo, marcando el límite entre esfuerzo sostenible y fatiga inminente.',
-    'lactate threshold': 'Umbral de Lactato: Ritmo y pulso a partir del cual el lactato se acumula más rápido de lo que se aclara, marcando el límite de fatiga.',
-    'tlb': 'TLB · Training Load Balance (Equilibrio de Carga): Compara el esfuerzo de los últimos 7 días con las 4 semanas previas (relación aguda/crónica) para advertir si estás en estado óptimo o en riesgo de lesión por sobrecarga.',
-    'equilibrio de carga': 'TLB · Equilibrio de Carga de Entrenamiento: Relación de fatiga aguda frente a forma crónica para evaluar si tu carga es productiva o excesiva.',
-    'carga de entrenamiento': 'Carga de Entrenamiento (EPOC): Exceso de consumo de oxígeno post-ejercicio. Mide el estrés fisiológico y el coste metabólico que la sesión exigió a tu cuerpo para recuperarse.',
-    'epoc': 'EPOC · Excess Post-Exercise Oxygen Consumption: Gasto energético y consumo de oxígeno que el cuerpo necesita tras el ejercicio para retornar a su estado de equilibrio basal.',
-    'pvi': 'PVI · Pace Variability Index: Índice de regularidad del ritmo de carrera. Cuanto más cercano a 1.0, más constante y eficiente es el ritmo.',
-    'cadencia (spm)': 'Cadencia (SPM) · Pasos por minuto: Frecuencia de zancada. En carrera, ritmos de 170–185 spm optimizan el rebote elástico y reducen el impacto en articulaciones.',
-    'tiempo de contacto': 'Tiempo de Contacto con el Suelo (GCT): Milisegundos que el pie pasa apoyado en cada zancada. Valores menores (200–240 ms) indican mayor reactividad y eficiencia de carrera.',
-    'oscilación vertical': 'Oscilación Vertical: Desplazamiento vertical del centro de gravedad al correr (cm). Menor rebote implica menor gasto energético desperdiciado hacia arriba.',
-    'índice odi': 'ODI · Oxygen Desaturation Index: Promedio de veces por hora de sueño que la saturación de oxígeno (SpO₂) cae un 3% o más. Normal: < 5/h; 5–14 leve; 15–29 moderada; ≥ 30 severa.',
-    'odi': 'ODI · Oxygen Desaturation Index: Número de desaturaciones de oxígeno por hora de sueño. Se utiliza clínicamente para detectar apneas e hipopneas nocturnas.',
-    'spo2': 'SpO₂ · Saturación Arterial de Oxígeno (%): Porcentaje de hemoglobina oxigenada en sangre. En reposo debe situarse entre el 95% y el 100%.',
-    'spo₂': 'SpO₂ · Saturación Arterial de Oxígeno (%): Porcentaje de hemoglobina oxigenada en sangre. En reposo debe situarse entre el 95% y el 100%.',
-    'fc en reposo': 'FC en Reposo (RHR): Pulsaciones mínimas por minuto al despertar o en reposo total. Valores bajos y estables reflejan un corazón fuerte y eficiente.',
-    'resting hr': 'Frecuencia Cardíaca en Reposo: Pulsaciones mínimas por minuto. Indica el estado de forma cardiovascular y nivel de recuperación.',
-    'pai': 'PAI · Inteligencia de Actividad Personal: Puntuación semanal basada en tu respuesta cardíaca. Mantener ≥ 100 puntos reduce el riesgo cardiovascular.',
-    'microdespertares': 'Microdespertares (Arousals autonómicos): Picos de aceleración cardíaca rápida (≥ 8 ppm) durante el sueño que interrumpen las fases profundas de descanso.',
-    'frecuencia respiratoria': 'Frecuencia Respiratoria: Ciclos respiratorios por minuto durante el sueño (normal entre 12 y 20 rpm).',
-    'preparación': 'Preparación (Readiness): Evaluación matutina de tu energía y capacidad de recuperación calculada combinando VFC, sueño y FC.',
-    'readiness': 'Preparación (Readiness): Evaluación matutina de recuperación física y mental calculada combinando VFC, sueño y FC.',
-    'estrés': 'Nivel de Estrés: Mide la actividad del sistema nervioso simpático a través de las fluctuaciones milimétricas del pulso cardíaco.'
-  };
-
   function injectTechBadgeStyles() {
     if (document.getElementById('zb-tech-badge-styles')) return;
     const style = document.createElement('style');
@@ -1140,54 +1167,37 @@
     document.head.appendChild(style);
   }
 
-  let techBadgeTimeout = null;
-  function setupTechInfoBadges() {
+  // Inyectar estilos de tooltip inmediatamente
+  if (typeof document !== 'undefined' && document.head) {
     injectTechBadgeStyles();
-    clearTimeout(techBadgeTimeout);
-    techBadgeTimeout = setTimeout(() => {
-      const targets = document.querySelectorAll(
-        '.trend-title, .stat-label, .metric-name, .apnea-stat-item .stat-label, h1, h2, h3, strong, dt, th'
-      );
-      targets.forEach(el => {
-        if (el.querySelector('.tech-info-badge') || el.closest('.tech-info-badge') || el.closest('button') || el.closest('a')) {
-          return;
-        }
-        const text = (el.textContent || '').trim().toLowerCase();
-        for (const [term, explanation] of Object.entries(TECH_GLOSSARY)) {
-          if (text === term || text.startsWith(term + ' ') || text.endsWith(' ' + term) || text.includes('(' + term + ')')) {
-            const badge = document.createElement('span');
-            badge.className = 'tech-info-badge';
-            badge.setAttribute('data-tooltip', explanation);
-            badge.setAttribute('title', explanation);
-            badge.setAttribute('aria-label', 'Información técnica');
-            badge.textContent = 'i';
-            el.appendChild(badge);
-            break;
-          }
-        }
-      });
-    }, 150);
+  } else if (typeof window !== 'undefined') {
+    window.addEventListener('DOMContentLoaded', injectTechBadgeStyles);
   }
 
-  // Observar el DOM para cuando el usuario interactúe con la app
+  // Observador debounced para no saturar la navegación ni el bucle de eventos de Vue
+  let observerDebounceTimer = null;
   const observer = new MutationObserver(() => {
-    if (document.getElementById('manual-host')) {
-      setupRegionSelect();
-    }
-    setupAiComposerHeartOptions();
-    setupSettingsCustomCard();
-    setupTechInfoBadges();
+    if (observerDebounceTimer) clearTimeout(observerDebounceTimer);
+    observerDebounceTimer = setTimeout(() => {
+      if (document.getElementById('manual-host')) {
+        setupRegionSelect();
+      }
+      setupAiComposerHeartOptions();
+      setupSettingsCustomCard();
+    }, 150);
   });
 
   window.addEventListener('popstate', () => {
-    setupAiComposerHeartOptions();
-    setupSettingsCustomCard();
-    setupTechInfoBadges();
+    setTimeout(() => {
+      setupAiComposerHeartOptions();
+      setupSettingsCustomCard();
+    }, 100);
   });
   window.addEventListener('hashchange', () => {
-    setupAiComposerHeartOptions();
-    setupSettingsCustomCard();
-    setupTechInfoBadges();
+    setTimeout(() => {
+      setupAiComposerHeartOptions();
+      setupSettingsCustomCard();
+    }, 100);
   });
 
   if (document.body) {

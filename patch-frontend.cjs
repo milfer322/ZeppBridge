@@ -2102,4 +2102,21 @@ if (fs.existsSync(materialCssPath)) {
   }
 }
 
+// 26. Mensaje de feedback en MaintenanceSection.vue al pulsar 'Volver a analizar'
+const maintSectionPath = 'src/views/settings/sections/MaintenanceSection.vue';
+if (fs.existsSync(maintSectionPath)) {
+  let msCode = fs.readFileSync(maintSectionPath, 'utf8');
+  if (!msCode.includes('dataMessage')) {
+    msCode = msCode.replace(
+      'const { userPrefs, dataBusy, retentionCutoffDate, cleanupData, reprocessLocalData, applyPrefsChange } = useSettingsContext().prefs;',
+      'const settingsCtx = useSettingsContext();\nconst { userPrefs, dataBusy, retentionCutoffDate, cleanupData, reprocessLocalData, applyPrefsChange } = settingsCtx.prefs;\nconst { dataMessage, dataError } = settingsCtx.feedback;'
+    );
+    const reparseRowTarget = '<span class="s-row-sub">{{ m.reparseSub }}</span>';
+    const feedbackAddition = `<span class="s-row-sub">{{ m.reparseSub }}</span>\n          <span v-if="dataMessage" class="hint-line ok" style="display: block; margin-top: 6px; font-size: 12px; color: var(--accent, #6dd58c);">{{ dataMessage }}</span>\n          <span v-if="dataError" class="api-error" style="display: block; margin-top: 6px; font-size: 12px; color: var(--danger, #ffb4ab);">{{ dataError }}</span>`;
+    msCode = msCode.replace(reparseRowTarget, feedbackAddition);
+    fs.writeFileSync(maintSectionPath, msCode, 'utf8');
+    console.log('[Patch] Feedback visual añadido en MaintenanceSection.vue para Volver a analizar');
+  }
+}
+
 console.log('[Patch] Proceso de parcheo finalizado con éxito.');
