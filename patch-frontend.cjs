@@ -1757,22 +1757,22 @@ const weeklyChartOption = computed(() => {`;
 
         <div class="apnea-stats-grid">
           <div class="apnea-stat-item">
-            <span class="stat-label">Índice ODI</span>
+            <span class="stat-label">Índice ODI <span class="tech-info-badge" data-tooltip="ODI · Oxygen Desaturation Index: Promedio de caídas de oxígeno ≥ 3% por hora de sueño. < 5 normal, 5–14 leve, 15–29 moderada, ≥ 30 severa." title="ODI · Oxygen Desaturation Index: Promedio de caídas de oxígeno ≥ 3% por hora de sueño. < 5 normal, 5–14 leve, 15–29 moderada, ≥ 30 severa.">i</span></span>
             <strong class="stat-value">{{ (breathing.odi !== null && breathing.odi !== undefined) ? breathing.odi : '—' }} <small v-if="breathing.odi !== null">/h</small></strong>
             <span class="stat-desc">Desaturaciones O₂ por hora</span>
           </div>
           <div class="apnea-stat-item">
-            <span class="stat-label">Puntuación Respiratoria</span>
+            <span class="stat-label">Puntuación Respiratoria <span class="tech-info-badge" data-tooltip="Puntuación SomnusCare (0–100): Evalúa la regularidad y oxigenación respiratoria durante la noche." title="Puntuación SomnusCare (0–100): Evalúa la regularidad y oxigenación respiratoria durante la noche.">i</span></span>
             <strong class="stat-value">{{ (breathing.score !== null && breathing.score !== undefined) ? breathing.score : '—' }} <small v-if="breathing.score !== null">/ 100</small></strong>
             <span class="stat-desc">Calidad calculada por el reloj</span>
           </div>
           <div class="apnea-stat-item">
-            <span class="stat-label">Eventos Totales O₂</span>
+            <span class="stat-label">Eventos Totales O₂ <span class="tech-info-badge" data-tooltip="Eventos Totales O₂: Número absoluto de episodios nocturnos con caídas detectadas en la saturación de oxígeno." title="Eventos Totales O₂: Número absoluto de episodios nocturnos con caídas detectadas en la saturación de oxígeno.">i</span></span>
             <strong class="stat-value">{{ (breathing.events !== null && breathing.events !== undefined) ? breathing.events : '—' }}</strong>
             <span class="stat-desc">Caídas registradas de SpO₂</span>
           </div>
           <div class="apnea-stat-item">
-            <span class="stat-label">Aceleraciones FC</span>
+            <span class="stat-label">Aceleraciones FC <span class="tech-info-badge" data-tooltip="Microdespertares / Arousals autonómicos: Subidas repentinas de frecuencia cardíaca (≥ 8 ppm) asociadas a reactivación tras un descenso de oxígeno." title="Microdespertares / Arousals autonómicos: Subidas repentinas de frecuencia cardíaca (≥ 8 ppm).">i</span></span>
             <strong class="stat-value">{{ (breathing.hr_spikes !== null && breathing.hr_spikes !== undefined) ? breathing.hr_spikes : '0' }} <small>(~{{ breathing.hr_spike_index }}/h)</small></strong>
             <span class="stat-desc">Saltos súbitos ≥8 ppm en reposo</span>
           </div>
@@ -1960,6 +1960,146 @@ if (fs.existsSync(stageI18nPath)) {
   }
   fs.writeFileSync(stageI18nPath, siCode, 'utf8');
   console.log('[Patch] Textos descriptivos de Dashboard añadidos en stage.i18n.ts');
+}
+
+// 25. Insignia informativa "i" con tooltip explicativo en términos biomédicos y técnicos (HRV, RMSSD, SDNN, VO2, etc.)
+const metricTrendCardPath = 'src/components/MetricTrendCard.vue';
+if (fs.existsSync(metricTrendCardPath)) {
+  let mtcCode = fs.readFileSync(metricTrendCardPath, 'utf8');
+  if (!mtcCode.includes('tech-info-badge')) {
+    const mtcScriptTarget = "const hasEventMarks = computed(() => {";
+    const mtcScriptAddition = `const TECH_GLOSSARY: Record<string, string> = {
+  'hrv_rmssd': 'HRV (RMSSD) · Root Mean Square of Successive Differences: Raíz cuadrada de las diferencias sucesivas entre latidos (ms). Refleja la actividad del sistema parasimpático y la capacidad de recuperación física frente al estrés.',
+  'hrv': 'HRV (SDNN) · Standard Deviation of NN intervals: Desviación estándar de los intervalos entre latidos normales (ms). Evalúa la variabilidad cardíaca global y la adaptabilidad autonómica cardiovascular a lo largo del tiempo.',
+  'vo2max': 'VO₂ Máx · Consumo Máximo de Oxígeno (ml/kg/min): Volumen máximo de oxígeno que tu cuerpo puede transportar y utilizar en esfuerzo extremo. Indicador clave de resistencia aeróbica y longevidad cardiorrespiratoria.',
+  'training_load': 'Carga de Entrenamiento (EPOC): Exceso de consumo de oxígeno post-ejercicio. Mide el estrés fisiológico y el coste metabólico que la sesión exigió a tu cuerpo para recuperarse.',
+  'lactate_threshold': 'Umbral de Lactato: Intensidad de carrera y pulso a partir del cual el ácido láctico se acumula en sangre más rápido de lo que los músculos pueden reciclarlo, marcando el límite entre esfuerzo sostenible y fatiga.',
+  'training_balance': 'TLB · Training Load Balance (Equilibrio de Carga): Compara el esfuerzo de los últimos 7 días con las 4 semanas previas (relación aguda/crónica) para advertir si estás en estado óptimo o en riesgo de lesión por sobrecarga.',
+  'spo2_odi': 'ODI · Oxygen Desaturation Index: Promedio de veces por hora de sueño que la saturación de oxígeno (SpO₂) cae un 3% o más. Normal: < 5/h; 5–14 leve; 15–29 moderada; ≥ 30 severa.',
+  'spo2': 'SpO₂ · Saturación Arterial de Oxígeno (%): Porcentaje de hemoglobina oxigenada en sangre. En reposo debe situarse entre el 95% y el 100%.',
+  'resting_hr': 'FC en Reposo (RHR): Pulsaciones mínimas por minuto al despertar o en reposo total. Valores bajos y estables reflejan un corazón fuerte y eficiente.',
+  'pai_total': 'PAI · Inteligencia de Actividad Personal: Puntuación semanal basada en tu respuesta cardíaca. Mantener ≥ 100 puntos reduce el riesgo cardiovascular.',
+  'respiratory_rate': 'Frecuencia Respiratoria: Respiraciones por minuto durante el sueño (normal entre 12 y 20 rpm).',
+  'stress': 'Nivel de Estrés: Mide la actividad del sistema nervioso simpático a través de las fluctuaciones milimétricas del pulso cardíaco.',
+  'readiness': 'Preparación (Readiness): Evaluación matutina de tu energía y capacidad de recuperación calculada combinando VFC, sueño y FC.',
+  'blood_pressure_systolic': 'Presión Sistólica: Presión máxima arterial durante el latido cardíaco. Normal < 120 mmHg.',
+  'blood_pressure_diastolic': 'Presión Diastólica: Presión mínima arterial entre latidos cardíacos. Normal < 80 mmHg.',
+};
+
+const techTooltip = computed(() => {
+  const key = String(props.info || props.series?.metric || '').toLowerCase();
+  if (TECH_GLOSSARY[key]) return TECH_GLOSSARY[key];
+  const l = String(props.label || '').toLowerCase();
+  if (l.includes('rmssd')) return TECH_GLOSSARY['hrv_rmssd'];
+  if (l.includes('sdnn')) return TECH_GLOSSARY['hrv'];
+  if (l.includes('vo2') || l.includes('vo₂')) return TECH_GLOSSARY['vo2max'];
+  if (l.includes('odi')) return TECH_GLOSSARY['spo2_odi'];
+  if (l.includes('lactat') || l.includes('umbral')) return TECH_GLOSSARY['lactate_threshold'];
+  if (l.includes('carga') || l.includes('load')) return TECH_GLOSSARY['training_load'];
+  if (l.includes('spo2') || l.includes('spo₂') || l.includes('oxígeno') || l.includes('oxigeno')) return TECH_GLOSSARY['spo2'];
+  if (l.includes('reposo') || l.includes('resting')) return TECH_GLOSSARY['resting_hr'];
+  if (l.includes('pai')) return TECH_GLOSSARY['pai_total'];
+  if (l.includes('respirat')) return TECH_GLOSSARY['respiratory_rate'];
+  if (l.includes('estrés') || l.includes('stress')) return TECH_GLOSSARY['stress'];
+  if (l.includes('preparación') || l.includes('readiness')) return TECH_GLOSSARY['readiness'];
+  return null;
+});
+`;
+    mtcCode = mtcCode.replace(mtcScriptTarget, mtcScriptAddition + '\n' + mtcScriptTarget);
+    mtcCode = mtcCode.replace(
+      '<strong class="trend-title">{{ label }}</strong>',
+      '<strong class="trend-title">{{ label }}<span v-if="techTooltip" class="tech-info-badge" :data-tooltip="techTooltip" :title="techTooltip" aria-label="Información técnica">i</span></strong>'
+    );
+    fs.writeFileSync(metricTrendCardPath, mtcCode, 'utf8');
+    console.log('[Patch] Insignias informativas "i" añadidas en MetricTrendCard.vue');
+  }
+}
+
+const materialCssPath = 'src/styles/material.css';
+if (fs.existsSync(materialCssPath)) {
+  let matCss = fs.readFileSync(materialCssPath, 'utf8');
+  if (!matCss.includes('.tech-info-badge')) {
+    matCss += `
+/* ── Insignia / Tooltip de Información Técnica (HRV, RMSSD, SDNN, VO2, etc.) ── */
+.tech-info-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  font-size: 10px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-weight: 700;
+  font-style: normal;
+  background: color-mix(in srgb, var(--accent, #6dd58c) 18%, transparent);
+  color: var(--accent, #6dd58c);
+  border: 1px solid color-mix(in srgb, var(--accent, #6dd58c) 40%, transparent);
+  cursor: help;
+  margin-left: 6px;
+  vertical-align: middle;
+  line-height: 1;
+  transition: all 0.2s ease;
+  user-select: none;
+  position: relative;
+  text-transform: none;
+}
+.tech-info-badge:hover {
+  background: var(--accent, #6dd58c);
+  color: #121316;
+  border-color: var(--accent, #6dd58c);
+  transform: scale(1.15);
+  box-shadow: 0 0 10px rgba(109, 213, 140, 0.45);
+}
+.tech-info-badge[data-tooltip]::before {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%) translateY(4px);
+  background: #1c1e24;
+  color: #f0f2f5;
+  border: 1px solid #3e424e;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.65);
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.45;
+  white-space: normal;
+  width: max-content;
+  max-width: 290px;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.18s ease, transform 0.18s ease;
+  z-index: 99999;
+  text-align: left;
+}
+.tech-info-badge[data-tooltip]::after {
+  content: '';
+  position: absolute;
+  bottom: calc(100% + 2px);
+  left: 50%;
+  transform: translateX(-50%);
+  border-width: 6px 6px 0 6px;
+  border-style: solid;
+  border-color: #3e424e transparent transparent transparent;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.18s ease;
+  z-index: 100000;
+}
+.tech-info-badge[data-tooltip]:hover::before,
+.tech-info-badge[data-tooltip]:hover::after {
+  opacity: 1;
+  visibility: visible;
+  transform: translateX(-50%) translateY(0);
+}
+`;
+    fs.writeFileSync(materialCssPath, matCss, 'utf8');
+    console.log('[Patch] Estilos para insignia técnica .tech-info-badge añadidos en material.css');
+  }
 }
 
 console.log('[Patch] Proceso de parcheo finalizado con éxito.');

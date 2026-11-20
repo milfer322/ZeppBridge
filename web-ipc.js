@@ -1018,6 +1018,157 @@
     }
   }
 
+  // ==============================================================================
+  // Diccionario y Tooltips de Información Técnica (HRV, RMSSD, SDNN, VO2max, etc.)
+  // ==============================================================================
+  const TECH_GLOSSARY = {
+    'hrv (rmssd)': 'HRV (RMSSD) · Root Mean Square of Successive Differences: Raíz cuadrada de las diferencias sucesivas entre latidos (ms). Refleja la actividad del sistema parasimpático y la capacidad de recuperación física frente al estrés.',
+    'vfc (rmssd)': 'VFC (RMSSD) · Raíz cuadrada de las diferencias sucesivas entre latidos (ms). Refleja la actividad del sistema parasimpático y la capacidad de recuperación física frente al estrés.',
+    'hrv (sdnn)': 'HRV (SDNN) · Standard Deviation of NN intervals: Desviación estándar de los intervalos entre latidos normales (ms). Evalúa la variabilidad cardíaca global y la adaptabilidad autonómica cardiovascular a lo largo del tiempo.',
+    'vfc (sdnn)': 'VFC (SDNN) · Desviación estándar de los intervalos entre latidos normales (ms). Evalúa la variabilidad cardíaca global y la adaptabilidad autonómica cardiovascular.',
+    'hrv': 'HRV / VFC · Variabilidad de la Frecuencia Cardíaca: Variación de tiempo en milisegundos entre latidos consecutivos. Un corazón sano no late a ritmo rígido; mayor variabilidad refleja un sistema nervioso autónomo descansado y resiliente.',
+    'vfc': 'VFC · Variabilidad de la Frecuencia Cardíaca: Variación de tiempo en milisegundos entre latidos consecutivos. Mayor variabilidad refleja un sistema nervioso autónomo descansado y resiliente.',
+    'vo2max': 'VO₂ Máx · Consumo Máximo de Oxígeno (ml/kg/min): Volumen máximo de oxígeno que tu cuerpo puede transportar y utilizar en esfuerzo extremo. Indicador clave de resistencia aeróbica y longevidad cardiorrespiratoria.',
+    'vo₂max': 'VO₂ Máx · Consumo Máximo de Oxígeno (ml/kg/min): Volumen máximo de oxígeno que tu cuerpo puede transportar y utilizar en esfuerzo extremo. Indicador clave de resistencia aeróbica y longevidad cardiorrespiratoria.',
+    'vo2 máx': 'VO₂ Máx · Consumo Máximo de Oxígeno (ml/kg/min): Volumen máximo de oxígeno que tu cuerpo puede transportar y utilizar en esfuerzo extremo.',
+    'vo₂ máx': 'VO₂ Máx · Consumo Máximo de Oxígeno (ml/kg/min): Volumen máximo de oxígeno que tu cuerpo puede transportar y utilizar en esfuerzo extremo.',
+    'umbral de lactato': 'Umbral de Lactato: Intensidad de carrera y pulso a partir del cual el ácido láctico se acumula en sangre más rápido de lo que los músculos pueden reciclarlo, marcando el límite entre esfuerzo sostenible y fatiga inminente.',
+    'lactate threshold': 'Umbral de Lactato: Ritmo y pulso a partir del cual el lactato se acumula más rápido de lo que se aclara, marcando el límite de fatiga.',
+    'tlb': 'TLB · Training Load Balance (Equilibrio de Carga): Compara el esfuerzo de los últimos 7 días con las 4 semanas previas (relación aguda/crónica) para advertir si estás en estado óptimo o en riesgo de lesión por sobrecarga.',
+    'equilibrio de carga': 'TLB · Equilibrio de Carga de Entrenamiento: Relación de fatiga aguda frente a forma crónica para evaluar si tu carga es productiva o excesiva.',
+    'carga de entrenamiento': 'Carga de Entrenamiento (EPOC): Exceso de consumo de oxígeno post-ejercicio. Mide el estrés fisiológico y el coste metabólico que la sesión exigió a tu cuerpo para recuperarse.',
+    'epoc': 'EPOC · Excess Post-Exercise Oxygen Consumption: Gasto energético y consumo de oxígeno que el cuerpo necesita tras el ejercicio para retornar a su estado de equilibrio basal.',
+    'pvi': 'PVI · Pace Variability Index: Índice de regularidad del ritmo de carrera. Cuanto más cercano a 1.0, más constante y eficiente es el ritmo.',
+    'cadencia (spm)': 'Cadencia (SPM) · Pasos por minuto: Frecuencia de zancada. En carrera, ritmos de 170–185 spm optimizan el rebote elástico y reducen el impacto en articulaciones.',
+    'tiempo de contacto': 'Tiempo de Contacto con el Suelo (GCT): Milisegundos que el pie pasa apoyado en cada zancada. Valores menores (200–240 ms) indican mayor reactividad y eficiencia de carrera.',
+    'oscilación vertical': 'Oscilación Vertical: Desplazamiento vertical del centro de gravedad al correr (cm). Menor rebote implica menor gasto energético desperdiciado hacia arriba.',
+    'índice odi': 'ODI · Oxygen Desaturation Index: Promedio de veces por hora de sueño que la saturación de oxígeno (SpO₂) cae un 3% o más. Normal: < 5/h; 5–14 leve; 15–29 moderada; ≥ 30 severa.',
+    'odi': 'ODI · Oxygen Desaturation Index: Número de desaturaciones de oxígeno por hora de sueño. Se utiliza clínicamente para detectar apneas e hipopneas nocturnas.',
+    'spo2': 'SpO₂ · Saturación Arterial de Oxígeno (%): Porcentaje de hemoglobina oxigenada en sangre. En reposo debe situarse entre el 95% y el 100%.',
+    'spo₂': 'SpO₂ · Saturación Arterial de Oxígeno (%): Porcentaje de hemoglobina oxigenada en sangre. En reposo debe situarse entre el 95% y el 100%.',
+    'fc en reposo': 'FC en Reposo (RHR): Pulsaciones mínimas por minuto al despertar o en reposo total. Valores bajos y estables reflejan un corazón fuerte y eficiente.',
+    'resting hr': 'Frecuencia Cardíaca en Reposo: Pulsaciones mínimas por minuto. Indica el estado de forma cardiovascular y nivel de recuperación.',
+    'pai': 'PAI · Inteligencia de Actividad Personal: Puntuación semanal basada en tu respuesta cardíaca. Mantener ≥ 100 puntos reduce el riesgo cardiovascular.',
+    'microdespertares': 'Microdespertares (Arousals autonómicos): Picos de aceleración cardíaca rápida (≥ 8 ppm) durante el sueño que interrumpen las fases profundas de descanso.',
+    'frecuencia respiratoria': 'Frecuencia Respiratoria: Ciclos respiratorios por minuto durante el sueño (normal entre 12 y 20 rpm).',
+    'preparación': 'Preparación (Readiness): Evaluación matutina de tu energía y capacidad de recuperación calculada combinando VFC, sueño y FC.',
+    'readiness': 'Preparación (Readiness): Evaluación matutina de recuperación física y mental calculada combinando VFC, sueño y FC.',
+    'estrés': 'Nivel de Estrés: Mide la actividad del sistema nervioso simpático a través de las fluctuaciones milimétricas del pulso cardíaco.'
+  };
+
+  function injectTechBadgeStyles() {
+    if (document.getElementById('zb-tech-badge-styles')) return;
+    const style = document.createElement('style');
+    style.id = 'zb-tech-badge-styles';
+    style.textContent = `
+      .tech-info-badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 15px;
+        height: 15px;
+        border-radius: 50%;
+        font-size: 10px;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        font-weight: 700;
+        font-style: normal;
+        background: color-mix(in srgb, var(--accent, #6dd58c) 18%, transparent);
+        color: var(--accent, #6dd58c);
+        border: 1px solid color-mix(in srgb, var(--accent, #6dd58c) 40%, transparent);
+        cursor: help;
+        margin-left: 6px;
+        vertical-align: middle;
+        line-height: 1;
+        transition: all 0.2s ease;
+        user-select: none;
+        position: relative;
+        text-transform: none;
+      }
+      .tech-info-badge:hover {
+        background: var(--accent, #6dd58c);
+        color: #121316;
+        border-color: var(--accent, #6dd58c);
+        transform: scale(1.15);
+        box-shadow: 0 0 10px rgba(109, 213, 140, 0.45);
+      }
+      .tech-info-badge[data-tooltip]::before {
+        content: attr(data-tooltip);
+        position: absolute;
+        bottom: calc(100% + 8px);
+        left: 50%;
+        transform: translateX(-50%) translateY(4px);
+        background: #1c1e24;
+        color: #f0f2f5;
+        border: 1px solid #3e424e;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.65);
+        padding: 8px 12px;
+        border-radius: 8px;
+        font-size: 12px;
+        font-weight: 400;
+        line-height: 1.45;
+        white-space: normal;
+        width: max-content;
+        max-width: 290px;
+        pointer-events: none;
+        opacity: 0;
+        visibility: hidden;
+        transition: opacity 0.18s ease, transform 0.18s ease;
+        z-index: 99999;
+        text-align: left;
+      }
+      .tech-info-badge[data-tooltip]::after {
+        content: '';
+        position: absolute;
+        bottom: calc(100% + 2px);
+        left: 50%;
+        transform: translateX(-50%);
+        border-width: 6px 6px 0 6px;
+        border-style: solid;
+        border-color: #3e424e transparent transparent transparent;
+        opacity: 0;
+        visibility: hidden;
+        transition: opacity 0.18s ease;
+        z-index: 100000;
+      }
+      .tech-info-badge[data-tooltip]:hover::before,
+      .tech-info-badge[data-tooltip]:hover::after {
+        opacity: 1;
+        visibility: visible;
+        transform: translateX(-50%) translateY(0);
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
+  let techBadgeTimeout = null;
+  function setupTechInfoBadges() {
+    injectTechBadgeStyles();
+    clearTimeout(techBadgeTimeout);
+    techBadgeTimeout = setTimeout(() => {
+      const targets = document.querySelectorAll(
+        '.trend-title, .stat-label, .metric-name, .apnea-stat-item .stat-label, h1, h2, h3, strong, dt, th'
+      );
+      targets.forEach(el => {
+        if (el.querySelector('.tech-info-badge') || el.closest('.tech-info-badge') || el.closest('button') || el.closest('a')) {
+          return;
+        }
+        const text = (el.textContent || '').trim().toLowerCase();
+        for (const [term, explanation] of Object.entries(TECH_GLOSSARY)) {
+          if (text === term || text.startsWith(term + ' ') || text.endsWith(' ' + term) || text.includes('(' + term + ')')) {
+            const badge = document.createElement('span');
+            badge.className = 'tech-info-badge';
+            badge.setAttribute('data-tooltip', explanation);
+            badge.setAttribute('title', explanation);
+            badge.setAttribute('aria-label', 'Información técnica');
+            badge.textContent = 'i';
+            el.appendChild(badge);
+            break;
+          }
+        }
+      });
+    }, 150);
+  }
+
   // Observar el DOM para cuando el usuario interactúe con la app
   const observer = new MutationObserver(() => {
     if (document.getElementById('manual-host')) {
@@ -1025,15 +1176,18 @@
     }
     setupAiComposerHeartOptions();
     setupSettingsCustomCard();
+    setupTechInfoBadges();
   });
 
   window.addEventListener('popstate', () => {
     setupAiComposerHeartOptions();
     setupSettingsCustomCard();
+    setupTechInfoBadges();
   });
   window.addEventListener('hashchange', () => {
     setupAiComposerHeartOptions();
     setupSettingsCustomCard();
+    setupTechInfoBadges();
   });
 
   if (document.body) {
