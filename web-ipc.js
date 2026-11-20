@@ -1030,6 +1030,13 @@
                 </div>
                 <button id="zb-custom-sync-btn" class="pill-button button primary" style="cursor: pointer; padding: 6px 14px; font-size: 12px;">🔄 Sincronizar 180 días</button>
               </div>
+              <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #2a2c30; padding-bottom: 12px;">
+                <div>
+                  <div style="font-weight: 600; color: #e2e2e6;">Descargar Series y Pesos de Fuerza (Gimnasio)</div>
+                  <div style="font-size: 12px; color: #9da3af;">Descarga desde Zepp Cloud las repeticiones por serie, los pesos en kg y ejercicios.</div>
+                </div>
+                <button id="zb-custom-strength-btn" class="pill-button button primary" style="cursor: pointer; padding: 6px 14px; font-size: 12px;">🏋️ Descargar Series de Fuerza</button>
+              </div>
               <div style="display: flex; justify-content: space-between; align-items: center;">
                 <div>
                   <div style="font-weight: 600; color: #e2e2e6;">Registro del Sincronizador (sync.log)</div>
@@ -1042,7 +1049,34 @@
           </section>
         `;
         const syncBtn = wrap.querySelector('#zb-custom-sync-btn');
+        const strengthBtn = wrap.querySelector('#zb-custom-strength-btn');
         const resDiv = wrap.querySelector('#zb-custom-sync-result');
+
+        strengthBtn.onclick = async () => {
+          strengthBtn.disabled = true;
+          strengthBtn.textContent = '⏳ Descargando series...';
+          resDiv.style.display = 'none';
+          try {
+            const res = await fetch('/api/bridge/sync_workout_details', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ maxRecords: 40, retryFailed: true })
+            });
+            const data = await res.json();
+            resDiv.textContent = '✅ Series y pesos de fuerza descargados correctamente de la nube. Ya puedes ver tus entrenamientos de gimnasio.';
+            resDiv.style.color = '#6dd58c';
+            resDiv.style.display = 'block';
+            strengthBtn.textContent = '🏋️ Descargar Series de Fuerza';
+            strengthBtn.disabled = false;
+            showToast('✅ Series y pesos de fuerza descargados correctamente', 'success');
+          } catch (e) {
+            resDiv.textContent = '❌ Error: ' + (e.message || e);
+            resDiv.style.color = '#ffb4ab';
+            resDiv.style.display = 'block';
+            strengthBtn.textContent = '🏋️ Descargar Series de Fuerza';
+            strengthBtn.disabled = false;
+          }
+        };
         syncBtn.onclick = async () => {
           syncBtn.disabled = true;
           syncBtn.textContent = '⏳ Sincronizando...';

@@ -110,6 +110,36 @@ const editReport = ref<any>({
 
 const syncing = ref(false);
 const syncResult = ref<{ ok: boolean; message: string; count?: number } | null>(null);
+const fetchingStrengthDetails = ref(false);
+const strengthDetailsResult = ref<{ ok: boolean; message: string } | null>(null);
+
+const runStrengthDetailsSync = async () => {
+  fetchingStrengthDetails.value = true;
+  strengthDetailsResult.value = null;
+  try {
+    const res = await fetch('/api/bridge/sync_workout_details', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ maxRecords: 40, retryFailed: true })
+    });
+    const data = await res.json();
+    if (data && data.success) {
+      strengthDetailsResult.value = {
+        ok: true,
+        message: '✅ Series y pesos de fuerza descargados correctamente de la nube. Entra en tus entrenamientos para ver las tablas de series, repeticiones y mapa muscular.'
+      };
+    } else {
+      strengthDetailsResult.value = {
+        ok: false,
+        message: 'No se pudieron descargar los detalles: ' + (data?.message || 'Error desconocido')
+      };
+    }
+  } catch (err: any) {
+    strengthDetailsResult.value = { ok: false, message: 'Error de conexión: ' + (err?.message || err) };
+  } finally {
+    fetchingStrengthDetails.value = false;
+  }
+};
 const restoreFileInput = ref<HTMLInputElement | null>(null);
 const restoring = ref(false);
 const restoreResult = ref<{ ok: boolean; message: string } | null>(null);
@@ -838,6 +868,23 @@ onMounted(() => {
           <div v-if="syncResult" :class="['alert', syncResult.ok ? 'success' : 'danger']" style="margin-top: 10px;">
             <Icon :name="syncResult.ok ? 'circle-check' : 'warning'" :size="15" />
             <span>{{ syncResult.message }}</span>
+          </div>
+
+          <div class="s-row" style="margin-top: 12px; border-top: 1px solid var(--line, #2a2c30); padding-top: 12px;">
+            <div class="s-row-main">
+              <span class="s-row-title">🏋️ Descargar Series y Pesos de Fuerza (Gimnasio)</span>
+              <span class="s-row-sub">Descarga desde los servidores de Zepp Cloud las repeticiones por serie, pesos en kg, pausas y ejercicios de todos tus entrenamientos de fuerza.</span>
+            </div>
+            <div class="s-row-control">
+              <button class="pill-button" type="button" :disabled="fetchingStrengthDetails" @click="runStrengthDetailsSync">
+                <Icon name="activity" :size="14" />
+                {{ fetchingStrengthDetails ? 'Descargando series...' : '🏋️ Descargar Series de Fuerza' }}
+              </button>
+            </div>
+          </div>
+          <div v-if="strengthDetailsResult" :class="['alert', strengthDetailsResult.ok ? 'success' : 'danger']" style="margin-top: 10px;">
+            <Icon :name="strengthDetailsResult.ok ? 'circle-check' : 'warning'" :size="15" />
+            <span>{{ strengthDetailsResult.message }}</span>
           </div>
         </div>
       </div>

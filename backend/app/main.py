@@ -27,6 +27,8 @@ from .zepp_cli import (
     save_credentials,
     run_sync_command,
     run_reprocess_command,
+    run_workout_details_command,
+    get_workout_detail_coverage_db,
     DATA_DIR,
     get_last_sync_info,
     is_db_empty,
@@ -37,7 +39,7 @@ from .zepp_cli import (
     clean_region_url
 )
 
-app = FastAPI(title="ZeppBridge Web Native", version="3.2.0")
+app = FastAPI(title="ZeppBridge Web Native", version="3.2.1")
 
 # Middleware de compresión GZIP para acelerar carga web de frontend y respuestas JSON
 app.add_middleware(
@@ -2181,6 +2183,23 @@ async def handle_bridge_command(command: str, request: Request):
             "FROM workout_strength_sets WHERE workout_id = ? ORDER BY set_index ASC",
             (wid,)
         )
+
+        # Si es un entrenamiento de fuerza pero aún no tiene series descargadas,
+        # intentar descargar automáticamente los detalles desde Zepp Cloud
+        if not strength_rows and w and (str(w.get("workout_type")) in ("52", "strength") or w.get("workout_type_override") == "strength" or w.get("strength_total_sets")):
+            try:
+                print(f"[WorkoutSeries] Entrenamiento de fuerza sin series locales ({wid}). Descargando detalles desde la nube...")
+                await run_workout_details_command(max_items=40)
+                strength_rows = query_all(
+                    "SELECT set_index, action_code, exercise_key, muscle_group, reps, weight_value, weight_unit, weight_kg, duration_ms, avg_hr, calories_kcal "
+                    "FROM workout_strength_sets WHERE workout_id = ? ORDER BY set_index ASC",
+                    (wid,)
+                )
+                if strength_rows:
+                    w = query_one("SELECT * FROM workouts WHERE workout_id = ?", (wid,))
+            except Exception as e:
+                print(f"[WorkoutSeries] Aviso al descargar detalles de fuerza: {e}")
+
         strength = None
         if strength_rows:
             sets = [
@@ -5138,26 +5157,23 @@ async def handle_bridge_command(command: str, request: Request):
     elif command == "workout_feedback_toast_show":
         return None
 
-    elif command in ("get_workout_detail_coverage", "start_workout_detail_backfill"):
-        if command == "start_workout_detail_backfill":
+    elif command in ("get_workout_detail_coverage", "start_workout_detail_backfill", "sync_workout_details"):
+        channel = body.get("channel") if isinstance(body, dict) else None
+        retry_failed = bool(body.get("retryFailed", False)) if isinstance(body, dict) else False
+        max_records = int(body.get("maxRecords", 40)) if isinstance(body, dict) else 40
+        if command in ("start_workout_detail_backfill", "sync_workout_details"):
             try:
-                asyncio.create_task(run_reprocess_command(force_all=True))
+                res_cov = await run_workout_details_command(channel=channel, max_items=max_records, retry_failed=retry_failed)
+                if command == "sync_workout_details":
+                    return {
+                        "success": True,
+                        "coverage": res_cov,
+                        "message": "Detalles y series de fuerza descargados correctamente"
+                    }
+                return res_cov
             except Exception as e:
-                print(f"[Backfill] Error iniciando reproceso: {e}")
-        total_w = query_one("SELECT count(*) as cnt FROM workouts") or {"cnt": 0}
-        persisted_w = query_one("SELECT count(*) as cnt FROM workouts WHERE sample_count > 0") or {"cnt": 0}
-        total = total_w.get("cnt", 0)
-        persisted = persisted_w.get("cnt", 0)
-        pending = max(0, total - persisted)
-        return {
-            "pending": pending,
-            "persisted": persisted,
-            "empty_from_cloud": 0,
-            "request_failed": 0,
-            "parse_failed": 0,
-            "unavailable": 0,
-            "ready": persisted
-        }
+                print(f"[Backfill] Error ejecutando workout-details: {e}")
+        return get_workout_detail_coverage_db(channel or "advanced")
 
     elif command == "import_batches":
         conn = get_db_connection()

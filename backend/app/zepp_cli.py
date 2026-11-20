@@ -455,3 +455,107 @@ async def run_reprocess_command(force_all: bool = True) -> Dict[str, Any]:
             "streams": {},
             "message": f"Error: {e}"
         }
+
+
+def get_workout_detail_coverage_db(channel: Optional[str] = "advanced") -> Dict[str, Any]:
+    """Calcula la cobertura de detalles de entrenamiento directamente desde zepp.db."""
+    db_file = DATA_DIR / "zepp.db"
+    if not db_file.exists():
+        return {
+            "pending": 0, "persisted": 0, "empty_from_cloud": 0,
+            "request_failed": 0, "parse_failed": 0, "unavailable": 0, "ready": 0
+        }
+    try:
+        conn = sqlite3.connect(str(db_file), timeout=10.0)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT count(*) as c FROM workouts")
+        row_tot = cursor.fetchone()
+        total = (row_tot["c"] if row_tot else 0) or 0
+        
+        cursor.execute("""
+            SELECT count(DISTINCT w.workout_id) as c 
+            FROM workouts w 
+            WHERE w.sample_count > 0 
+               OR EXISTS (SELECT 1 FROM workout_strength_sets s WHERE s.workout_id = w.workout_id)
+        """)
+        row_pers = cursor.fetchone()
+        persisted = (row_pers["c"] if row_pers else 0) or 0
+        
+        pending = max(0, total - persisted)
+        conn.close()
+        return {
+            "pending": pending,
+            "persisted": persisted,
+            "empty_from_cloud": 0,
+            "request_failed": 0,
+            "parse_failed": 0,
+            "unavailable": 0,
+            "ready": pending
+        }
+    except Exception as e:
+        print(f"[CoverageDB] Error calculando cobertura: {e}")
+        return {
+            "pending": 0, "persisted": 0, "empty_from_cloud": 0,
+            "request_failed": 0, "parse_failed": 0, "unavailable": 0, "ready": 0
+        }
+
+
+async def run_workout_details_command(
+    channel: Optional[str] = None,
+    max_items: int = 40,
+    retry_failed: bool = False
+) -> Dict[str, Any]:
+    """Ejecuta zeppbridge-cli workout-details para descargar las series, pesos y repeticiones de fuerza desde Zepp Cloud."""
+    st = get_auth_status()
+    selected_channel = channel or ("official" if st.get("data_source") == "official" else "advanced")
+    
+    args = [CLI_BIN, "workout-details", "--channel", selected_channel, "--max-items", str(max_items), "--json"]
+    if retry_failed:
+        args.append("--retry-failed")
+
+    env = os.environ.copy()
+    env["ZEPPBRIDGE_DATA_DIR"] = str(DATA_DIR)
+    env["ZEPPBRIDGE_CREDENTIAL_STORE"] = "env"
+    token = get_stored_token(st.get("user_id"))
+    if token:
+        env["ZEPPBRIDGE_APP_TOKEN"] = token
+    if st.get("user_id"):
+        env["ZEPPBRIDGE_USER_ID"] = st["user_id"]
+
+    print(f"[WorkoutDetails] Ejecutando comando CLI: {' '.join(args)}")
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env
+        )
+        stdout, stderr = await process.communicate()
+        out_text = stdout.decode("utf-8", errors="replace").strip()
+        err_text = stderr.decode("utf-8", errors="replace").strip()
+        print(f"[WorkoutDetails] CLI finalizado (código {process.returncode})")
+        if out_text:
+            print(f"[WorkoutDetails] Salida: {out_text}")
+        if err_text:
+            print(f"[WorkoutDetails] Error: {err_text}")
+
+        parsed = None
+        json_match = re.search(r"(\{.*\})", out_text, re.DOTALL)
+        if json_match:
+            try:
+                parsed = json.loads(json_match.group(1))
+            except Exception:
+                pass
+
+        if parsed and isinstance(parsed, dict):
+            if "coverage" in parsed and isinstance(parsed["coverage"], dict):
+                return parsed["coverage"]
+            return parsed
+
+        return get_workout_detail_coverage_db(selected_channel)
+    except Exception as e:
+        print(f"[WorkoutDetails] Excepción al ejecutar: {e}")
+        return get_workout_detail_coverage_db(selected_channel)
+
