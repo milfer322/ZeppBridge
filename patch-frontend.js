@@ -2454,6 +2454,11 @@ const syncStrengthDetail = async () => {
     wdCode = wdCode.replace(templateTarget, templateReplacement);
 
     // Mantener la tarjeta principal de fuerza en el escenario con su botón único (sin duplicados en la cabecera)
+    // y ocultar tarjeta de "Cómo te fue en la carrera" en deportes que no sean carrera (fuerza, gimnasio, etc.)
+    wdCode = wdCode.replace(
+      "if (insightLoading.value || insightError.value || insight.value?.supported) put('insight', names.insight);",
+      "if (sport.value === 'running' && (insightLoading.value || insightError.value || insight.value?.supported)) put('insight', names.insight);"
+    );
     fs.writeFileSync(workoutDetailPath, wdCode, 'utf8');
     console.log('[Patch] Ranura y tarjeta principal de series y pesos añadidas en WorkoutDetail.vue');
   }
@@ -2481,6 +2486,178 @@ if (fs.existsSync(prefsPath)) {
     prCode = prCode.replace(sanTarget, sanReplacement);
     fs.writeFileSync(prefsPath, prCode, 'utf8');
     console.log('[Patch] Stage Manager configurado para mantener tarjetas de fuerza visibles en prefs.ts');
+  }
+}
+
+// 29. Acordeón minimizado por defecto para Procedencia (WorkoutProvenanceCard.vue)
+const provenanceCardPath = 'src/components/workout/WorkoutProvenanceCard.vue';
+if (fs.existsSync(provenanceCardPath)) {
+  let provCode = fs.readFileSync(provenanceCardPath, 'utf8');
+  if (!provCode.includes('isCollapsed')) {
+    provCode = provCode.replace(
+      "import GlyphTile from '../GlyphTile.vue';",
+      "import { ref } from 'vue';\nimport GlyphTile from '../GlyphTile.vue';"
+    );
+    provCode = provCode.replace(
+      "const imported = (workout: WorkoutMetrics) => workout.type_source === 'imported';",
+      "const imported = (workout: WorkoutMetrics) => workout.type_source === 'imported';\nconst isCollapsed = ref(true);"
+    );
+    const provTplTarget = `<template>
+  <section class="surface-card meta-card" :aria-label="t.provenanceAria">
+    <div class="section-head"><GlyphTile name="database" tone="altitude" :size="40" /><div><p class="section-eyebrow">{{ t.eyebrowProvenance }}</p><h2>{{ t.provenanceTitle }}</h2></div></div>
+    <dl>`;
+    const provTplRepl = `<template>
+  <section class="surface-card meta-card" :aria-label="t.provenanceAria">
+    <div class="section-head" @click="isCollapsed = !isCollapsed" style="cursor: pointer; display: flex; align-items: center; justify-content: space-between; user-select: none;">
+      <div style="display: flex; align-items: center; gap: 10px;">
+        <GlyphTile name="database" tone="altitude" :size="32" />
+        <div>
+          <p class="section-eyebrow" style="margin: 0;">{{ t.eyebrowProvenance }}</p>
+          <h2 style="font-size: 16px; margin: 0;">{{ t.provenanceTitle }}</h2>
+        </div>
+      </div>
+      <div style="display: flex; align-items: center; gap: 8px;">
+        <span v-if="isCollapsed" style="font-size: 12px; color: var(--muted, #94a3b8); font-family: var(--font-mono, monospace);">
+          {{ deviceName || 'Zepp Cloud' }} · #{{ workout.workout_id }}
+        </span>
+        <span style="font-size: 12px; color: var(--accent, #6dd58c); font-weight: 600; padding: 3px 8px; border-radius: 6px; background: rgba(255,255,255,0.05);">
+          {{ isCollapsed ? 'Desplegar ▾' : 'Plegar ▴' }}
+        </span>
+      </div>
+    </div>
+    <div v-show="!isCollapsed" style="margin-top: 12px; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 12px;">
+    <dl>`;
+    const provEndTarget = `    <p v-if="fit.note" class="fit-note ok" role="status"><Icon name="circle-check" :size="13" />{{ fit.note }}</p>
+    <p v-if="fit.error" class="fit-note bad" role="alert"><Icon name="warning" :size="13" />{{ fit.error }}</p>
+  </section>
+</template>`;
+    const provEndRepl = `    <p v-if="fit.note" class="fit-note ok" role="status"><Icon name="circle-check" :size="13" />{{ fit.note }}</p>
+    <p v-if="fit.error" class="fit-note bad" role="alert"><Icon name="warning" :size="13" />{{ fit.error }}</p>
+    </div>
+  </section>
+</template>`;
+    provCode = provCode.replace(provTplTarget, provTplRepl);
+    provCode = provCode.replace(provEndTarget, provEndRepl);
+    fs.writeFileSync(provenanceCardPath, provCode, 'utf8');
+    console.log('[Patch] Acordeón plegable añadido a WorkoutProvenanceCard.vue');
+  }
+}
+
+// 30. Acordeón minimizado por defecto para Valores Decodificados (WorkoutDecodedCard.vue)
+const decodedCardPath = 'src/components/workout/WorkoutDecodedCard.vue';
+if (fs.existsSync(decodedCardPath)) {
+  let decCode = fs.readFileSync(decodedCardPath, 'utf8');
+  if (!decCode.includes('isCollapsed')) {
+    decCode = decCode.replace(
+      "import { computed } from 'vue';",
+      "import { computed, ref } from 'vue';"
+    );
+    decCode = decCode.replace(
+      "const t = useMessages(workoutDetailMessages);",
+      "const t = useMessages(workoutDetailMessages);\nconst isCollapsed = ref(true);"
+    );
+    const decTplTarget = `<template>
+  <section class="surface-card side-card decoded-card" :aria-label="t.decodedAria">
+    <div class="section-head"><GlyphTile name="structured-data" tone="pace" :size="40" /><div><p class="section-eyebrow">{{ t.eyebrowDecoded }}</p><h2>{{ t.decodedTitle }}</h2></div></div>
+    <div class="decoded-list">`;
+    const decTplRepl = `<template>
+  <section class="surface-card side-card decoded-card" :aria-label="t.decodedAria">
+    <div class="section-head" @click="isCollapsed = !isCollapsed" style="cursor: pointer; display: flex; align-items: center; justify-content: space-between; user-select: none;">
+      <div style="display: flex; align-items: center; gap: 10px;">
+        <GlyphTile name="structured-data" tone="pace" :size="32" />
+        <div>
+          <p class="section-eyebrow" style="margin: 0;">{{ t.eyebrowDecoded }}</p>
+          <h2 style="font-size: 16px; margin: 0;">{{ t.decodedTitle }}</h2>
+        </div>
+      </div>
+      <div style="display: flex; align-items: center; gap: 8px;">
+        <span v-if="isCollapsed" style="font-size: 12px; color: var(--muted, #94a3b8);">
+          {{ present.length }} métricas técnicas
+        </span>
+        <span style="font-size: 12px; color: var(--accent, #6dd58c); font-weight: 600; padding: 3px 8px; border-radius: 6px; background: rgba(255,255,255,0.05);">
+          {{ isCollapsed ? 'Desplegar ▾' : 'Plegar ▴' }}
+        </span>
+      </div>
+    </div>
+    <div v-show="!isCollapsed" style="margin-top: 12px; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 12px;">
+    <div class="decoded-list">`;
+    const decEndTarget = `    <p class="mapping-note"><GlyphTile name="verified" :size="18" />{{ t.decodedNote }}</p>
+  </section>
+</template>`;
+    const decEndRepl = `    <p class="mapping-note"><GlyphTile name="verified" :size="18" />{{ t.decodedNote }}</p>
+    </div>
+  </section>
+</template>`;
+    decCode = decCode.replace(decTplTarget, decTplRepl);
+    decCode = decCode.replace(decEndTarget, decEndRepl);
+    fs.writeFileSync(decodedCardPath, decCode, 'utf8');
+    console.log('[Patch] Acordeón plegable añadido a WorkoutDecodedCard.vue');
+  }
+}
+
+// 31. Versión compacta Lite con botones directos para Exportar y Compartir (WorkoutExportCard.vue)
+const exportCardPath = 'src/components/workout/WorkoutExportCard.vue';
+if (fs.existsSync(exportCardPath)) {
+  let expCode = fs.readFileSync(exportCardPath, 'utf8');
+  if (!expCode.includes('triggerQuickExport')) {
+    expCode = expCode.replace(
+      "const FORMATS: ExportFormat[] = ['json', 'csv', 'gpx', 'fit'];",
+      `const FORMATS: ExportFormat[] = ['json', 'csv', 'gpx', 'fit'];
+const triggerQuickExport = (fmt: ExportFormat) => {
+  format.value = fmt;
+  emit('export');
+};`
+    );
+    const expTplTarget = `<template>
+  <section class="surface-card side-card deliver-card" :aria-label="t.exportAria">
+    <div class="section-head"><GlyphTile name="document" tone="sleep" :size="40" /><div><h2>{{ t.exportTitle }}</h2></div></div>
+    <p class="card-sub">{{ t.exportSub }}</p>
+    <SegmentTrack
+      fill
+      compact
+      :items="FORMATS.filter((item) => item !== 'fit' || isTauri()).map((item) => ({ value: item, label: item.toUpperCase() }))"
+      :model-value="format"
+      :disabled="exportBusy"
+      :aria-label="t.exportFormatAria"
+      @update:model-value="(value) => { format = value as ExportFormat; }"
+    />
+    <button class="button primary wide" type="button" :disabled="exportBusy" @click="emit('export')"><GlyphTile name="cloud-output" :size="20" />{{ format === 'fit' ? t.saveFit : t.exportGo(format.toUpperCase()) }}</button>
+    <p v-if="exportedNote" class="action-note ok" role="status"><Icon name="circle-check" :size="13" />{{ exportedNote }}</p>
+    <p v-if="actionError" class="action-note bad" role="alert"><Icon name="warning" :size="13" />{{ actionError }}</p>
+  </section>
+</template>`;
+    const expTplRepl = `<template>
+  <section class="surface-card side-card deliver-card deliver-card-lite" :aria-label="t.exportAria" style="padding: 14px 18px;">
+    <div style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px;">
+      <div style="display: flex; align-items: center; gap: 10px;">
+        <GlyphTile name="document" tone="sleep" :size="30" />
+        <div>
+          <h2 style="font-size: 16px; margin: 0;">{{ t.exportTitle }}</h2>
+          <p style="margin: 0; font-size: 12px; color: var(--muted, #94a3b8);">Copia o descarga en 1 clic</p>
+        </div>
+      </div>
+      <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+        <button
+          v-for="item in FORMATS.filter((f) => f !== 'fit' || isTauri())"
+          :key="item"
+          type="button"
+          class="button secondary"
+          :disabled="exportBusy"
+          @click="triggerQuickExport(item)"
+          style="min-height: 32px; padding: 4px 12px; font-size: 12px; font-weight: 700; font-family: var(--font-mono, monospace); border-radius: 8px; display: inline-flex; align-items: center; gap: 5px; cursor: pointer;"
+        >
+          <Icon name="download" :size="13" />
+          {{ item.toUpperCase() }}
+        </button>
+      </div>
+    </div>
+    <p v-if="exportedNote" class="action-note ok" role="status" style="margin: 10px 0 0;"><Icon name="circle-check" :size="13" />{{ exportedNote }}</p>
+    <p v-if="actionError" class="action-note bad" role="alert" style="margin: 10px 0 0;"><Icon name="warning" :size="13" />{{ actionError }}</p>
+  </section>
+</template>`;
+    expCode = expCode.replace(expTplTarget, expTplRepl);
+    fs.writeFileSync(exportCardPath, expCode, 'utf8');
+    console.log('[Patch] Barra compacta Lite de exportación añadida a WorkoutExportCard.vue');
   }
 }
 

@@ -2988,12 +2988,13 @@ async def handle_bridge_command(command: str, request: Request):
         w = query_one("SELECT * FROM workouts WHERE workout_id = ?", (wid,))
         overrides = load_json_file("workout_type_overrides.json", {})
         wtype = overrides.get(wid) or (w.get("workout_type_override") if w else None) or (w.get("workout_type") if w else None) or "running"
+        is_run = any(k in str(wtype).lower() for k in ("run", "carrera", "treadmill", "trail"))
         return {
             "workout_id": wid,
             "workout_type": wtype,
-            "supported": True,
-            "unsupported_reason": None,
-            "unsupported_code": None,
+            "supported": is_run,
+            "unsupported_reason": "Solo disponible para entrenamientos de carrera" if not is_run else None,
+            "unsupported_code": "unsupported_workout_type" if not is_run else None,
             "facts": [],
             "baseline_included": [],
             "baseline_excluded": [],
