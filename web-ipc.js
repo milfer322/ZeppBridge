@@ -1147,8 +1147,107 @@
   }
 
   // ==============================================================================
-  // Estilos de Insignias y Tooltips Técnicos (inyectados una sola vez)
+  // Insignias Técnicas y Floating Tooltip Universal
+  // Inmune a overflow:hidden, backdrop-filter y clipping de tarjetas
   // ==============================================================================
+  let floatingTooltipEl = null;
+  let hideTooltipTimer = null;
+
+  function ensureFloatingTooltip() {
+    if (!floatingTooltipEl && typeof document !== 'undefined' && document.body) {
+      floatingTooltipEl = document.createElement('div');
+      floatingTooltipEl.id = 'zb-floating-tooltip';
+      floatingTooltipEl.style.cssText = `
+        position: fixed;
+        display: none;
+        opacity: 0;
+        background: #1c1e24;
+        color: #f0f2f5;
+        border: 1px solid #3e424e;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.75);
+        padding: 9px 13px;
+        border-radius: 8px;
+        font-size: 12px;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        font-weight: 400;
+        font-style: normal;
+        line-height: 1.45;
+        white-space: normal;
+        max-width: 320px;
+        width: max-content;
+        pointer-events: none;
+        z-index: 9999999;
+        text-align: left;
+        transition: opacity 0.15s ease, transform 0.15s ease;
+        transform: translateY(4px);
+      `;
+      document.body.appendChild(floatingTooltipEl);
+    }
+    return floatingTooltipEl;
+  }
+
+  function showFloatingTooltip(target) {
+    if (!target) return;
+    const text = target.getAttribute('data-tooltip') || 
+                 target.getAttribute('data-tech-tooltip') || 
+                 target.getAttribute('aria-label') ||
+                 target.getAttribute('title');
+    if (!text || !text.trim()) return;
+
+    if (target.hasAttribute('title')) {
+      target.removeAttribute('title');
+    }
+
+    if (hideTooltipTimer) {
+      clearTimeout(hideTooltipTimer);
+      hideTooltipTimer = null;
+    }
+
+    const tip = ensureFloatingTooltip();
+    if (!tip) return;
+
+    tip.textContent = text;
+    tip.style.left = '0px';
+    tip.style.top = '0px';
+    tip.style.display = 'block';
+
+    const rect = target.getBoundingClientRect();
+    const tipRect = tip.getBoundingClientRect();
+
+    let left = rect.left + (rect.width / 2) - (tipRect.width / 2);
+    if (left < 12) left = 12;
+    if (left + tipRect.width > window.innerWidth - 12) {
+      left = window.innerWidth - tipRect.width - 12;
+    }
+
+    let top = rect.top - tipRect.height - 8;
+    if (top < 12) {
+      top = rect.bottom + 8;
+    }
+    if (top + tipRect.height > window.innerHeight - 12) {
+      top = window.innerHeight - tipRect.height - 12;
+    }
+    if (top < 12) top = 12;
+
+    tip.style.left = `${Math.round(left)}px`;
+    tip.style.top = `${Math.round(top)}px`;
+    tip.style.opacity = '1';
+    tip.style.transform = 'translateY(0)';
+  }
+
+  function hideFloatingTooltip() {
+    if (floatingTooltipEl) {
+      floatingTooltipEl.style.opacity = '0';
+      floatingTooltipEl.style.transform = 'translateY(4px)';
+      if (hideTooltipTimer) clearTimeout(hideTooltipTimer);
+      hideTooltipTimer = setTimeout(() => {
+        if (floatingTooltipEl && floatingTooltipEl.style.opacity === '0') {
+          floatingTooltipEl.style.display = 'none';
+        }
+      }, 150);
+    }
+  }
+
   function injectTechBadgeStyles() {
     if (document.getElementById('zb-tech-badge-styles')) return;
     const style = document.createElement('style');
@@ -1184,67 +1283,24 @@
         transform: scale(1.15);
         box-shadow: 0 0 10px rgba(109, 213, 140, 0.45);
       }
-      .tech-info-badge[data-tooltip]::before {
-        content: attr(data-tooltip);
-        position: absolute;
-        bottom: calc(100% + 8px);
-        left: 50%;
-        transform: translateX(-50%) translateY(4px);
-        background: #1c1e24;
-        color: #f0f2f5;
-        border: 1px solid #3e424e;
-        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.65);
-        padding: 8px 12px;
-        border-radius: 8px;
-        font-size: 12px;
-        font-weight: 400;
-        line-height: 1.45;
-        white-space: normal;
-        width: max-content;
-        max-width: 290px;
-        pointer-events: none;
-        opacity: 0;
-        visibility: hidden;
-        transition: opacity 0.18s ease, transform 0.18s ease;
-        z-index: 99999;
-        text-align: left;
-      }
-      .tech-info-badge[data-tooltip]::after {
-        content: '';
-        position: absolute;
-        bottom: calc(100% + 2px);
-        left: 50%;
-        transform: translateX(-50%);
-        border-width: 6px 6px 0 6px;
-        border-style: solid;
-        border-color: #3e424e transparent transparent transparent;
-        opacity: 0;
-        visibility: hidden;
-        transition: opacity 0.18s ease;
-        z-index: 100000;
-      }
-      .tech-info-badge[data-tooltip]:hover::before,
-      .tech-info-badge[data-tooltip]:hover::after {
-        opacity: 1;
-        visibility: visible;
-        transform: translateX(-50%) translateY(0);
+      .tech-info-badge::before,
+      .tech-info-badge::after {
+        display: none !important;
       }
     `;
     document.head.appendChild(style);
   }
 
-  // Inyectar estilos de tooltip inmediatamente
   if (typeof document !== 'undefined' && document.head) {
     injectTechBadgeStyles();
   } else if (typeof window !== 'undefined') {
     window.addEventListener('DOMContentLoaded', injectTechBadgeStyles);
   }
 
-  // Suprimir el tooltip nativo duplicado del navegador en las insignias informativas "i"
   if (typeof document !== 'undefined') {
     const stripBadgeTitles = () => {
       try {
-        const badges = document.querySelectorAll('.tech-info-badge[title]');
+        const badges = document.querySelectorAll('.tech-info-badge[title], [data-tooltip][title]');
         badges.forEach(b => b.removeAttribute('title'));
       } catch (e) {}
     };
@@ -1254,17 +1310,29 @@
       stripBadgeTitles();
     }
     document.addEventListener('mouseover', (e) => {
-      const badge = e.target && e.target.closest && e.target.closest('.tech-info-badge');
-      if (badge && badge.hasAttribute('title')) {
-        badge.removeAttribute('title');
+      const badge = e.target && e.target.closest && e.target.closest('.tech-info-badge, [data-tooltip]');
+      if (badge) {
+        showFloatingTooltip(badge);
       }
     }, true);
-    document.addEventListener('pointerenter', (e) => {
-      const badge = e.target && e.target.closest && e.target.closest('.tech-info-badge');
-      if (badge && badge.hasAttribute('title')) {
-        badge.removeAttribute('title');
+    document.addEventListener('mouseout', (e) => {
+      const badge = e.target && e.target.closest && e.target.closest('.tech-info-badge, [data-tooltip]');
+      if (badge) {
+        if (e.relatedTarget && badge.contains(e.relatedTarget)) {
+          return;
+        }
+        hideFloatingTooltip();
       }
     }, true);
+    document.addEventListener('click', (e) => {
+      const badge = e.target && e.target.closest && e.target.closest('.tech-info-badge, [data-tooltip]');
+      if (badge) {
+        showFloatingTooltip(badge);
+      } else {
+        hideFloatingTooltip();
+      }
+    }, true);
+    window.addEventListener('scroll', hideFloatingTooltip, { passive: true });
   }
 
   // Observador debounced para no saturar la navegación ni el bucle de eventos de Vue

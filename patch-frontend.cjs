@@ -2284,21 +2284,33 @@ if (fs.existsSync(metricTrendCardPath)) {
 };
 
 const techTooltip = computed(() => {
-  const key = String(props.info || props.series?.metric || '').toLowerCase();
-  if (TECH_GLOSSARY[key]) return TECH_GLOSSARY[key];
-  const l = String(props.label || '').toLowerCase();
-  if (l.includes('rmssd')) return TECH_GLOSSARY['hrv_rmssd'];
-  if (l.includes('sdnn')) return TECH_GLOSSARY['hrv'];
-  if (l.includes('vo2') || l.includes('vo₂')) return TECH_GLOSSARY['vo2max'];
-  if (l.includes('odi')) return TECH_GLOSSARY['spo2_odi'];
-  if (l.includes('lactat') || l.includes('umbral')) return TECH_GLOSSARY['lactate_threshold'];
-  if (l.includes('carga') || l.includes('load')) return TECH_GLOSSARY['training_load'];
-  if (l.includes('spo2') || l.includes('spo₂') || l.includes('oxígeno') || l.includes('oxigeno')) return TECH_GLOSSARY['spo2'];
-  if (l.includes('reposo') || l.includes('resting')) return TECH_GLOSSARY['resting_hr'];
-  if (l.includes('pai')) return TECH_GLOSSARY['pai_total'];
-  if (l.includes('respirat')) return TECH_GLOSSARY['respiratory_rate'];
-  if (l.includes('estrés') || l.includes('stress')) return TECH_GLOSSARY['stress'];
-  if (l.includes('preparación') || l.includes('readiness')) return TECH_GLOSSARY['readiness'];
+  let key = '';
+  let l = '';
+  try {
+    const p = (typeof props !== 'undefined' ? props : (typeof __props !== 'undefined' ? __props : null));
+    if (p) {
+      key = String(p.info || p.series?.metric || '').toLowerCase();
+      l = String(p.label || '').toLowerCase();
+    }
+  } catch (e) {}
+  if (!l) {
+    try { l = String(label || '').toLowerCase(); } catch (e) {}
+  }
+  if (key && TECH_GLOSSARY[key]) return TECH_GLOSSARY[key];
+  if (l) {
+    if (l.includes('rmssd')) return TECH_GLOSSARY['hrv_rmssd'];
+    if (l.includes('sdnn')) return TECH_GLOSSARY['hrv'];
+    if (l.includes('vo2') || l.includes('vo₂')) return TECH_GLOSSARY['vo2max'];
+    if (l.includes('odi')) return TECH_GLOSSARY['spo2_odi'];
+    if (l.includes('lactat') || l.includes('umbral')) return TECH_GLOSSARY['lactate_threshold'];
+    if (l.includes('carga') || l.includes('load')) return TECH_GLOSSARY['training_load'];
+    if (l.includes('spo2') || l.includes('spo₂') || l.includes('oxígeno') || l.includes('oxigeno')) return TECH_GLOSSARY['spo2'];
+    if (l.includes('reposo') || l.includes('resting')) return TECH_GLOSSARY['resting_hr'];
+    if (l.includes('pai')) return TECH_GLOSSARY['pai_total'];
+    if (l.includes('respirat')) return TECH_GLOSSARY['respiratory_rate'];
+    if (l.includes('estrés') || l.includes('stress')) return TECH_GLOSSARY['stress'];
+    if (l.includes('preparación') || l.includes('readiness')) return TECH_GLOSSARY['readiness'];
+  }
   return null;
 });
 `;
@@ -2348,50 +2360,9 @@ if (fs.existsSync(materialCssPath)) {
   transform: scale(1.15);
   box-shadow: 0 0 10px rgba(109, 213, 140, 0.45);
 }
-.tech-info-badge[data-tooltip]::before {
-  content: attr(data-tooltip);
-  position: absolute;
-  bottom: calc(100% + 8px);
-  left: 50%;
-  transform: translateX(-50%) translateY(4px);
-  background: #1c1e24;
-  color: #f0f2f5;
-  border: 1px solid #3e424e;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.65);
-  padding: 8px 12px;
-  border-radius: 8px;
-  font-size: 12px;
-  font-weight: 400;
-  line-height: 1.45;
-  white-space: normal;
-  width: max-content;
-  max-width: 290px;
-  pointer-events: none;
-  opacity: 0;
-  visibility: hidden;
-  transition: opacity 0.18s ease, transform 0.18s ease;
-  z-index: 99999;
-  text-align: left;
-}
-.tech-info-badge[data-tooltip]::after {
-  content: '';
-  position: absolute;
-  bottom: calc(100% + 2px);
-  left: 50%;
-  transform: translateX(-50%);
-  border-width: 6px 6px 0 6px;
-  border-style: solid;
-  border-color: #3e424e transparent transparent transparent;
-  opacity: 0;
-  visibility: hidden;
-  transition: opacity 0.18s ease;
-  z-index: 100000;
-}
-.tech-info-badge[data-tooltip]:hover::before,
-.tech-info-badge[data-tooltip]:hover::after {
-  opacity: 1;
-  visibility: visible;
-  transform: translateX(-50%) translateY(0);
+.tech-info-badge::before,
+.tech-info-badge::after {
+  display: none !important;
 }
 `;
     fs.writeFileSync(materialCssPath, matCss, 'utf8');
