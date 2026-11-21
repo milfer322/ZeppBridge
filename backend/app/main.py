@@ -116,6 +116,9 @@ PUBLIC_EXEMPT_PATHS = {
     "/favicon.ico",
     "/apple-touch-icon.png",
     "/robots.txt",
+    "/api/bridge/diag",
+    "/api/bridge/sync_log",
+    "/api/bridge/debug_strength"
 }
 
 @app.middleware("http")
@@ -953,7 +956,7 @@ def parse_strength_sets_from_lap(lap_text: str, workout_id: str) -> List[Dict[st
     rows = [r.strip() for r in lap_text.split(";") if r.strip()]
     for row in rows:
         cols = row.split(",")
-        if len(cols) < 29:
+        if len(cols) < 20:
             continue
         try:
             int(cols[0].strip())
@@ -980,12 +983,12 @@ def parse_strength_sets_from_lap(lap_text: str, workout_id: str) -> List[Dict[st
                     pass
             return None
 
-        action_code = get_int(28)
-        reps = get_int(22)
-        unit_code = get_int(23)
-        weight_raw = get_float(21)
-        ms_raw = get_int(43) or -1
-        sec_int = get_int(1) or -1
+        action_code = get_int(28) if len(cols) > 28 else None
+        reps = get_int(22) if len(cols) > 22 else None
+        unit_code = get_int(23) if len(cols) > 23 else 0
+        weight_raw = get_float(21) if len(cols) > 21 else None
+        ms_raw = get_int(43) if len(cols) > 43 else -1
+        sec_int = get_int(1) if len(cols) > 1 else -1
 
         if (action_code is None or action_code < 0) and (reps is None or reps == 0) and (weight_raw is None or weight_raw <= 0):
             continue
@@ -1009,11 +1012,11 @@ def parse_strength_sets_from_lap(lap_text: str, workout_id: str) -> List[Dict[st
         elif sec_int > 0 and sec_int <= 3600:
             duration_ms = sec_int * 1000
 
-        avg_hr = get_int(11)
+        avg_hr = get_int(11) if len(cols) > 11 else None
         if avg_hr is not None and (avg_hr <= 0 or avg_hr > 255):
             avg_hr = None
 
-        calories_raw = get_float(14)
+        calories_raw = get_float(14) if len(cols) > 14 else None
         calories_kcal = round(calories_raw, 1) if calories_raw is not None and calories_raw >= 0 else None
 
         ex_key, m_group = STRENGTH_ACTION_CATALOG.get(action_code, (None, None))
@@ -1061,93 +1064,116 @@ async def fetch_and_store_strength_workout(wid: str) -> bool:
         conn.execute("UPDATE workouts SET zepp_source = 'run.huami.com' WHERE workout_id = ? AND (zepp_source IS NULL OR TRIM(zepp_source) = '')", (wid,))
         conn.commit()
 
-        # 1. Intentar mediante CLI oficial
-        try:
-            await run_workout_details_command(max_items=40, retry_failed=True)
-        except Exception as e:
-            print(f"[StrengthSync] Aviso ejecutando CLI workout-details: {e}")
-
-        c = conn.execute("SELECT count(*) as c FROM workout_strength_sets WHERE workout_id = ?", (wid,)).fetchone()
-        if c and c["c"] > 0:
-            return True
-
-        # 2. Descarga directa desde la API de Zepp Cloud
-        st = get_auth_status()
-        user_id = st.get("user_id")
-        token = get_stored_token(user_id)
-        if not token:
-            print("[StrengthSync] No hay app_token disponible para descarga cloud directa.")
-            return False
-
-        region_host = st.get("region_host") or "api-mifit-de2.huami.com"
-        headers = {
-            "apptoken": token,
-            "appname": "com.huami.midong",
-            "appplatform": "ios_phone",
-            "accept": "*/*",
-            "v": "2.0",
-            "vn": "10.2.5",
-            "cv": "1722_10.2.5",
-            "vb": "202604132257",
-            "lang": "es",
-            "timezone": "UTC"
-        }
-
-        w = conn.execute("SELECT zepp_source FROM workouts WHERE workout_id = ?", (wid,)).fetchone()
-        sources_to_try = []
-        if w and w["zepp_source"]:
-            sources_to_try.append(w["zepp_source"])
-        for s in ("run.huami.com", "huami", "official", "run.gps"):
-            if s not in sources_to_try:
-                sources_to_try.append(s)
-
+        # 1. Intentar buscar si el payload ya existe en raw_records
         data = None
-        for src in sources_to_try:
-            url = f"https://{region_host}/v1/sport/run/detail.json"
-            try:
-                async with httpx.AsyncClient(timeout=15.0) as client:
-                    resp = await client.get(url, params={"trackid": str(wid), "source": src}, headers=headers)
-                    if resp.status_code == 200:
-                        rj = resp.json()
-                        payload = rj.get("data") if isinstance(rj, dict) and isinstance(rj.get("data"), dict) else rj
-                        if payload and (payload.get("lap") or payload.get("strengthSets") or payload.get("strengthAssess")):
-                            data = payload
-                            print(f"[StrengthSync] Detalle obtenido con éxito desde {src} para {wid}")
-                            break
-            except Exception as e:
-                print(f"[StrengthSync] Error consultando {src}: {e}")
+        try:
+            raw_row = conn.execute(
+                "SELECT payload FROM raw_records WHERE source_key LIKE ? OR source_key LIKE ? ORDER BY created_at DESC LIMIT 1",
+                (f"workout_detail:{wid}:%", f"%{wid}%")
+            ).fetchone()
+            if raw_row and raw_row["payload"]:
+                raw_json = json.loads(raw_row["payload"])
+                pl = raw_json.get("data") if isinstance(raw_json, dict) and isinstance(raw_json.get("data"), (dict, str)) else raw_json
+                if isinstance(pl, str):
+                    try:
+                        pl = json.loads(pl)
+                    except Exception:
+                        pass
+                if isinstance(pl, dict) and (pl.get("lap") or pl.get("strengthSets") or pl.get("strength_sets")):
+                    data = pl
+                    print(f"[StrengthSync] Encontrado detalle en raw_records local para {wid}")
+        except Exception as e:
+            print(f"[StrengthSync] Error leyendo raw_records local: {e}")
+
+        # 2. Si no estaba en raw_records, descargar desde la API de Zepp Cloud
+        if not data:
+            st = get_auth_status()
+            user_id = st.get("user_id")
+            token = get_stored_token(user_id)
+            if not token:
+                print("[StrengthSync] No hay app_token disponible para descarga cloud directa.")
+                return False
+
+            region_host = clean_region_host(st.get("region_host") or "api-mifit-de2.huami.com")
+            headers = {
+                "apptoken": token,
+                "appname": "com.huami.midong",
+                "appplatform": "ios_phone",
+                "accept": "*/*",
+                "v": "2.0",
+                "vn": "10.2.5",
+                "cv": "1722_10.2.5",
+                "vb": "202604132257",
+                "lang": "es",
+                "timezone": "UTC"
+            }
+
+            w = conn.execute("SELECT zepp_source FROM workouts WHERE workout_id = ?", (wid,)).fetchone()
+            sources_to_try = []
+            if w and w["zepp_source"]:
+                sources_to_try.append(w["zepp_source"])
+            for s in ("run.huami.com", "huami", "official", "run.mifit.huami.com", "run.gps"):
+                if s not in sources_to_try:
+                    sources_to_try.append(s)
+
+            for src in sources_to_try:
+                url = f"https://{region_host}/v1/sport/run/detail.json"
+                try:
+                    async with httpx.AsyncClient(timeout=15.0) as client:
+                        resp = await client.get(url, params={"trackid": str(wid), "source": src}, headers=headers)
+                        print(f"[StrengthSync] HTTP {resp.status_code} desde {src} para {wid}")
+                        if resp.status_code == 200:
+                            rj = resp.json()
+                            pl = rj.get("data") if isinstance(rj, dict) and isinstance(rj.get("data"), (dict, str)) else rj
+                            if isinstance(pl, str):
+                                try:
+                                    pl = json.loads(pl)
+                                except Exception:
+                                    pass
+                            if isinstance(pl, dict) and (pl.get("lap") or pl.get("strengthSets") or pl.get("strength_sets") or pl.get("strengthAssess")):
+                                data = pl
+                                print(f"[StrengthSync] Detalle obtenido con éxito desde {src} para {wid}")
+                                break
+                except Exception as e:
+                    print(f"[StrengthSync] Error consultando {src}: {e}")
 
         if not data:
+            print(f"[StrengthSync] No se encontró payload con datos de fuerza para {wid}")
             return False
 
-        sets = parse_strength_sets_from_lap(data.get("lap") or "", wid)
-        if not sets and data.get("strengthSets"):
-            try:
-                raw_sets = data.get("strengthSets")
-                if isinstance(raw_sets, str):
+        sets = []
+        if isinstance(data, dict) and data.get("lap"):
+            sets = parse_strength_sets_from_lap(data.get("lap") or "", wid)
+
+        if not sets and isinstance(data, dict):
+            raw_sets = data.get("strengthSets") or data.get("strength_sets")
+            if isinstance(raw_sets, str):
+                try:
                     raw_sets = json.loads(raw_sets)
-                if isinstance(raw_sets, list):
-                    for idx, s in enumerate(raw_sets, start=1):
-                        ac = int(s.get("actionType") or s.get("action_type") or 0)
-                        reps = int(s.get("reps") or s.get("count") or 0)
-                        weight = float(s.get("weight") or 0) if s.get("weight") else None
-                        ex_key, m_group = STRENGTH_ACTION_CATALOG.get(ac, (None, None))
-                        sets.append({
-                            "workout_id": wid,
-                            "set_index": idx,
-                            "action_code": ac,
-                            "exercise_key": ex_key,
-                            "muscle_group": m_group,
-                            "reps": reps,
-                            "weight_value": weight,
-                            "weight_unit": "kg",
-                            "weight_kg": weight,
-                            "duration_ms": None,
-                            "avg_hr": None,
-                            "calories_kcal": None
-                        })
-            except Exception as e:
-                print(f"[StrengthSync] Error parseando strengthSets alternativo: {e}")
+                except Exception:
+                    pass
+            if isinstance(raw_sets, list):
+                for idx, s in enumerate(raw_sets, start=1):
+                    if not isinstance(s, dict):
+                        continue
+                    ac = int(s.get("actionType") or s.get("action_type") or s.get("actionCode") or s.get("action") or 0)
+                    reps = int(s.get("reps") or s.get("count") or s.get("repeatCount") or 0)
+                    w_val = float(s.get("weight") or s.get("weightValue") or s.get("weight_value") or 0) if (s.get("weight") or s.get("weightValue") or s.get("weight_value")) else None
+                    ex_key, m_group = STRENGTH_ACTION_CATALOG.get(ac, (None, None))
+                    sets.append({
+                        "workout_id": wid,
+                        "set_index": idx,
+                        "action_code": ac,
+                        "exercise_key": ex_key,
+                        "muscle_group": m_group,
+                        "reps": reps,
+                        "weight_value": w_val,
+                        "weight_unit": "kg",
+                        "weight_kg": w_val,
+                        "duration_ms": int(s.get("duration") or s.get("durationMs") or s.get("duration_ms") or 0) or None,
+                        "avg_hr": int(s.get("avgHr") or s.get("avg_hr") or 0) or None,
+                        "calories_kcal": float(s.get("calories") or s.get("calories_kcal") or 0) or None
+                    })
 
         if sets:
             conn.execute("DELETE FROM workout_strength_sets WHERE workout_id = ?", (wid,))
@@ -1179,6 +1205,9 @@ async def fetch_and_store_strength_workout(wid: str) -> bool:
             conn.commit()
             print(f"[StrengthSync] Guardadas {len(sets)} series de fuerza para {wid}")
             return True
+        else:
+            print(f"[StrengthSync] El payload no contenía series parseables para {wid}")
+            return False
 
         return False
     except Exception as e:
@@ -5653,18 +5682,44 @@ async def handle_bridge_command(command: str, request: Request):
                     return {
                         "success": ok,
                         "coverage": res_cov,
-                        "message": "Series y pesos del entrenamiento descargados correctamente" if ok else "No se encontraron nuevas series en la nube"
+                        "message": "Series y pesos del entrenamiento descargados correctamente" if ok else "No se encontraron series de fuerza en la nube para este entrenamiento."
                     }
                 else:
                     try:
                         execute_write("UPDATE workouts SET zepp_source = 'run.huami.com' WHERE zepp_source IS NULL OR TRIM(zepp_source) = ''")
                     except Exception:
                         pass
-                    res_cov = await run_workout_details_command(channel=channel, max_items=max_records, retry_failed=retry_failed)
+
+                    # 1. Ejecutar descarga directa para los entrenamientos de fuerza
+                    strength_workouts = query_all(
+                        "SELECT workout_id FROM workouts "
+                        "WHERE workout_type IN ('52', 'strength') OR workout_type_override = 'strength' OR (strength_total_sets IS NOT NULL AND strength_total_sets > 0) "
+                        "ORDER BY start_time DESC LIMIT ?",
+                        (max_records,)
+                    )
+                    downloaded_count = 0
+                    if strength_workouts:
+                        for sw in strength_workouts:
+                            sw_id = str(sw["workout_id"])
+                            has_sets = query_one("SELECT 1 FROM workout_strength_sets WHERE workout_id = ? LIMIT 1", (sw_id,))
+                            if not has_sets or retry_failed:
+                                ok = await fetch_and_store_strength_workout(sw_id)
+                                if ok:
+                                    downloaded_count += 1
+
+                    # 2. Respaldo mediante CLI si está soportado
+                    try:
+                        await run_workout_details_command(channel=channel, max_items=max_records, retry_failed=retry_failed)
+                    except Exception:
+                        pass
+
+                    res_cov = get_workout_detail_coverage_db(channel or "advanced")
+                    msg = f"Se actualizaron {downloaded_count} entrenamientos de fuerza con sus series y pesos." if downloaded_count > 0 else "Proceso completado. Tus series locales ya estaban al día."
                     return {
                         "success": True,
+                        "downloaded_count": downloaded_count,
                         "coverage": res_cov,
-                        "message": "Detalles y series de fuerza descargados correctamente"
+                        "message": msg
                     }
             except Exception as e:
                 print(f"[Backfill] Error ejecutando workout-details: {e}")
@@ -6057,6 +6112,97 @@ def get_sync_log():
         except Exception as e:
             return f"Error leyendo sync.log: {e}"
     return "Aún no se ha registrado ninguna sincronización en sync.log."
+
+@app.get("/api/bridge/debug_strength")
+async def debug_strength_endpoint(workout_id: Optional[str] = None):
+    """Diagnóstico en vivo para inspeccionar entrenamientos de fuerza, tablas y llamadas cloud."""
+    conn = get_db_connection()
+    if not conn:
+        return {"error": "No database connection"}
+    
+    st = get_auth_status()
+    user_id = st.get("user_id")
+    token = get_stored_token(user_id)
+    region_host = clean_region_host(st.get("region_host") or "api-mifit-de2.huami.com")
+    
+    if workout_id:
+        target = conn.execute("SELECT * FROM workouts WHERE workout_id = ?", (workout_id,)).fetchone()
+    else:
+        target = conn.execute("SELECT * FROM workouts WHERE workout_type IN ('52', 'strength') OR workout_type_override = 'strength' OR (strength_total_sets IS NOT NULL AND strength_total_sets > 0) ORDER BY start_time DESC LIMIT 1").fetchone()
+    
+    if not target:
+        latest = conn.execute("SELECT workout_id, workout_type, start_time, duration_seconds FROM workouts ORDER BY start_time DESC LIMIT 5").fetchall()
+        return {
+            "error": "No strength workout found in workouts table",
+            "auth_status": st,
+            "has_token": bool(token),
+            "latest_workouts": [dict(r) for r in latest] if latest else []
+        }
+    
+    wid = str(target["workout_id"])
+    target_dict = dict(target)
+    
+    s_rows = conn.execute("SELECT * FROM workout_strength_sets WHERE workout_id = ? ORDER BY set_index ASC", (wid,)).fetchall()
+    raw_row = conn.execute("SELECT id, stream, source_key, length(payload) as payload_len, substr(payload, 1, 300) as preview, created_at FROM raw_records WHERE source_key LIKE ? OR payload LIKE ?", (f"%{wid}%", f"%{wid}%")).fetchall()
+    
+    cloud_result = {}
+    if token:
+        headers = {
+            "apptoken": token,
+            "appname": "com.huami.midong",
+            "appplatform": "ios_phone",
+            "accept": "*/*",
+            "v": "2.0",
+            "vn": "10.2.5",
+            "cv": "1722_10.2.5",
+            "vb": "202604132257",
+            "lang": "es",
+            "timezone": "UTC"
+        }
+        sources = ["run.huami.com", "huami", "official", "run.mifit.huami.com"]
+        for src in sources:
+            url = f"https://{region_host}/v1/sport/run/detail.json"
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    resp = await client.get(url, params={"trackid": wid, "source": src}, headers=headers)
+                    cloud_result[src] = {
+                        "status": resp.status_code,
+                        "length": len(resp.text),
+                        "snippet": resp.text[:400]
+                    }
+                    if resp.status_code == 200:
+                        try:
+                            rj = resp.json()
+                            pl = rj.get("data") if isinstance(rj, dict) and isinstance(rj.get("data"), (dict, str)) else rj
+                            if isinstance(pl, str):
+                                try:
+                                    pl = json.loads(pl)
+                                except Exception:
+                                    pass
+                            cloud_result[src]["keys"] = list(pl.keys()) if isinstance(pl, dict) else type(pl).__name__
+                            if isinstance(pl, dict) and pl.get("lap"):
+                                cloud_result[src]["lap_preview"] = str(pl["lap"])[:300]
+                                cloud_result[src]["lap_rows_count"] = len(str(pl["lap"]).split(";"))
+                                cloud_result[src]["first_row_cols_count"] = len(str(pl["lap"]).split(";")[0].split(","))
+                                parsed_test = parse_strength_sets_from_lap(pl["lap"], wid)
+                                cloud_result[src]["parsed_sets_count"] = len(parsed_test)
+                                if parsed_test:
+                                    cloud_result[src]["first_set"] = parsed_test[0]
+                        except Exception as pe:
+                            cloud_result[src]["parse_error"] = str(pe)
+            except Exception as e:
+                cloud_result[src] = {"error": str(e)}
+
+    return {
+        "workout_id": wid,
+        "workout": target_dict,
+        "existing_sets_count": len(s_rows),
+        "existing_sets": [dict(r) for r in s_rows],
+        "raw_records_matches": [dict(r) for r in raw_row] if raw_row else [],
+        "cloud_checks": cloud_result,
+        "auth": st,
+        "has_token": bool(token)
+    }
 
 # ==============================================================================
 # Configuración Custom, Sincronización Automática, Telegram y Gemini

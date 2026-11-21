@@ -457,9 +457,13 @@
           });
         }
 
-        // Si es un reproceso local de datos, mostrar toast explicativo y emitir evento
+        // Si es descarga o sincronización de series de fuerza
         if (command === 'sync_workout_details') {
-          showToast('✅ Series y pesos de fuerza sincronizados correctamente de Zepp Cloud.', 'success', 5000);
+          if (data && data.message) {
+            showToast(data.message, data.success ? 'success' : 'warning', 5000);
+          } else {
+            showToast(data?.success ? '✅ Series y pesos descargados.' : '⚠️ No se encontraron series en la nube.', data?.success ? 'success' : 'warning', 5000);
+          }
         }
 
         if (command === 'reprocess_local_data') {

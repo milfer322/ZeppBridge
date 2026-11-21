@@ -2437,7 +2437,11 @@ const syncStrengthDetail = async () => {
   try {
     const caller = (window as any).__ZB_BRIDGE__?.call || (window as any).__TAURI__?.invoke || (window as any).__TAURI_INTERNALS__?.invoke;
     if (caller) {
-      await caller('sync_workout_details', { workout_id: workoutId.value, retryFailed: true });
+      const wid = String((workoutId as any)?.value || workoutId || '');
+      const res = await caller('sync_workout_details', { workout_id: wid, workoutId: wid, retryFailed: true });
+      if (res && res.message) {
+        (window as any).__ZB_TOAST__?.(res.message, res.success ? 'success' : 'warning', 5000);
+      }
     }
     await loadDetail();
   } catch (e) {
