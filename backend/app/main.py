@@ -1169,16 +1169,18 @@ async def fetch_and_store_strength_workout(wid: str) -> bool:
         data = None
         w_rec = None
         try:
-            w_rec = conn.execute("SELECT raw_record_id, zepp_source FROM workouts WHERE workout_id = ?", (wid,)).fetchone()
+            w_row = conn.execute("SELECT raw_record_id, zepp_source FROM workouts WHERE workout_id = ?", (wid,)).fetchone()
+            if w_row:
+                w_rec = dict(w_row)
         except Exception:
             pass
 
         raw_candidates = []
         try:
-            if w_rec and w_rec["raw_record_id"]:
+            if w_rec and w_rec.get("raw_record_id"):
                 r = conn.execute("SELECT id, stream, source_key, payload, payload_zip FROM raw_records WHERE id = ?", (w_rec["raw_record_id"],)).fetchone()
                 if r:
-                    raw_candidates.append(r)
+                    raw_candidates.append(dict(r))
 
             r_more = conn.execute(
                 "SELECT id, stream, source_key, payload, payload_zip FROM raw_records WHERE source_key LIKE ? OR source_key LIKE ? ORDER BY id DESC LIMIT 5",
@@ -1186,7 +1188,7 @@ async def fetch_and_store_strength_workout(wid: str) -> bool:
             ).fetchall()
             for r in r_more:
                 if not any(c["id"] == r["id"] for c in raw_candidates):
-                    raw_candidates.append(r)
+                    raw_candidates.append(dict(r))
         except Exception as e:
             print(f"[StrengthSync] Error leyendo raw_records local: {e}")
 
@@ -1242,7 +1244,7 @@ async def fetch_and_store_strength_workout(wid: str) -> bool:
             }
 
             sources_to_try = []
-            if w_rec and w_rec["zepp_source"]:
+            if w_rec and w_rec.get("zepp_source"):
                 sources_to_try.append(w_rec["zepp_source"])
             for s in ["run.11141377.huami.com", "run.huami.com", "huami", "official", "run.mifit.huami.com", "run.gps"]:
                 if s not in sources_to_try:
@@ -6366,9 +6368,9 @@ async def debug_strength_endpoint(
 
         # Inspección del registro raw vinculado por raw_record_id (descomprimiendo payload_zip si aplica)
         raw_rec_info = None
-        if target.get("raw_record_id"):
+        if target_dict.get("raw_record_id"):
             try:
-                r_rec = conn.execute("SELECT id, stream, source_key, length(payload) as payload_len, length(payload_zip) as payload_zip_len, payload, payload_zip, created_at FROM raw_records WHERE id = ?", (target["raw_record_id"],)).fetchone()
+                r_rec = conn.execute("SELECT id, stream, source_key, length(payload) as payload_len, length(payload_zip) as payload_zip_len, payload, payload_zip, created_at FROM raw_records WHERE id = ?", (target_dict["raw_record_id"],)).fetchone()
                 if r_rec:
                     r_dict = dict(r_rec)
                     pl_str = r_dict.pop("payload", None)
@@ -6435,8 +6437,8 @@ async def debug_strength_endpoint(
                 "timezone": "UTC"
             }
             sources = []
-            if target.get("zepp_source"):
-                sources.append(target["zepp_source"])
+            if target_dict.get("zepp_source"):
+                sources.append(target_dict["zepp_source"])
             for s in ["run.11141377.huami.com", "run.huami.com", "huami", "official", "run.mifit.huami.com"]:
                 if s not in sources:
                     sources.append(s)
