@@ -1801,6 +1801,10 @@ async def handle_bridge_command(command: str, request: Request):
             st_info["last_error"] = None
             with open(SYNC_STATE_FILE, "w", encoding="utf-8") as f:
                 json.dump(st_info, f, indent=2)
+            cfg = get_custom_config()
+            if "last_reauth_notif" in cfg:
+                cfg.pop("last_reauth_notif", None)
+                save_custom_config(cfg)
         except Exception:
             pass
 
@@ -6996,8 +7000,29 @@ async def background_scheduler():
                     if auth_st.get("configured"):
                         print(f"[Scheduler] Sincronización incremental automática (cada {interval_min} min)...")
                         try:
-                            await run_sync_command(mode="incremental")
+                            sync_res = await run_sync_command(mode="incremental")
                             cfg["last_auto_sync"] = now.isoformat()
+                            if sync_res and sync_res.get("needs_reauth"):
+                                tg_token = cfg.get("telegram_bot_token")
+                                tg_chat_id = cfg.get("telegram_chat_id")
+                                last_notif = cfg.get("last_reauth_notif")
+                                should_notify = False
+                                if not last_notif:
+                                    should_notify = True
+                                else:
+                                    try:
+                                        if (now - datetime.fromisoformat(last_notif)).total_seconds() >= 12 * 3600:
+                                            should_notify = True
+                                    except Exception:
+                                        should_notify = True
+                                if tg_token and tg_chat_id and should_notify:
+                                    msg = (
+                                        "⚠️ *Alerta ZeppBridge: Sesión de Zepp Cloud Caducada*\n\n"
+                                        "El token de conexión con los servidores de Amazfit / Zepp (Huami) ha expirado.\n"
+                                        "La sincronización automática de datos está pausada hasta que renueves el App Token o inicies sesión en *Ajustes ➔ Cuenta*."
+                                    )
+                                    await loop.run_in_executor(None, send_telegram_message, tg_token, tg_chat_id, msg)
+                                    cfg["last_reauth_notif"] = now.isoformat()
                             save_custom_config(cfg)
                         except Exception as s_err:
                             print(f"[Scheduler] Error en auto-sync: {s_err}")
