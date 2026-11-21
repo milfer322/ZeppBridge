@@ -6279,7 +6279,7 @@ async def debug_strength_endpoint(
     conn = None
     try:
         ensure_strength_schema()
-        conn = get_db_connection()
+        conn = get_db_write_connection() or get_db_connection()
         if not conn:
             return {"error": "No database connection"}
 
@@ -6338,6 +6338,12 @@ async def debug_strength_endpoint(
                 )
             conn.execute("UPDATE workouts SET strength_total_sets = 4, strength_total_reps = 49 WHERE workout_id = ?", (wid,))
             conn.commit()
+            try:
+                refreshed = conn.execute("SELECT * FROM workouts WHERE workout_id = ?", (wid,)).fetchone()
+                if refreshed:
+                    target_dict = dict(refreshed)
+            except Exception:
+                pass
 
         download_executed = False
         download_result = None
