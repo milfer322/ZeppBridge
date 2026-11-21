@@ -161,11 +161,22 @@ async def check_huami_token_valid(token: str, region_host: str) -> Dict[str, Any
     url = f"https://{clean_host}/v1/sport/run/history.json"
     headers = {
         "apptoken": token.strip(),
-        "User-Agent": "ZeppBridge/3.2.1 (Linux)",
+        "appname": "com.huami.midong",
+        "appplatform": "ios_phone",
+        "accept": "*/*",
+        "v": "2.0",
+        "vn": "10.2.5",
+        "cv": "1722_10.2.5",
+        "lang": "es",
+        "timezone": "Europe/Madrid",
+        "User-Agent": "ZeppBridge/3.2.1 (Linux)"
+    }
+    params = {
+        "source": "run.huami.com"
     }
     try:
         async with httpx.AsyncClient(timeout=12.0) as client:
-            resp = await client.get(url, headers=headers)
+            resp = await client.get(url, params=params, headers=headers)
             if resp.status_code == 200:
                 try:
                     data = resp.json()
@@ -173,21 +184,22 @@ async def check_huami_token_valid(token: str, region_host: str) -> Dict[str, Any
                     data = {}
                 code = data.get("code") or data.get("error_code") or data.get("result")
                 msg = str(data.get("message", "")).lower()
-                if code in (101, "101", "failed", "error") or "token" in msg or "expired" in msg:
-                    return {"valid": False, "expired": True, "message": data.get("message") or "Token de sesión caducado"}
+                if code in (101, "101", "failed", "error", 0) and ("token" in msg or "expired" in msg or "invalid" in msg):
+                    return {"valid": False, "expired": True, "message": "Tu sesión de Zepp Cloud ha caducado o el token no es válido."}
                 return {"valid": True, "expired": False, "data": data}
             elif resp.status_code in (401, 403):
-                return {"valid": False, "expired": True, "message": f"HTTP {resp.status_code} No autorizado (Token caducado)"}
+                return {"valid": False, "expired": True, "message": "Tu sesión de Zepp Cloud ha caducado o no está autorizada."}
             else:
-                return {"valid": False, "expired": False, "message": f"HTTP {resp.status_code} desde Zepp Cloud"}
+                # Comprobación de respaldo con band_data
+                alt_url = f"https://{clean_host}/v1/data/band_data.json"
+                alt_resp = await client.get(alt_url, params={"query_type": "summary"}, headers=headers)
+                if alt_resp.status_code in (401, 403):
+                    return {"valid": False, "expired": True, "message": "Tu sesión de Zepp Cloud ha caducado o el token no es válido."}
+                elif alt_resp.status_code == 200:
+                    return {"valid": True, "expired": False, "data": {}}
+                return {"valid": False, "expired": True, "message": f"Los servidores de Zepp Cloud rechazaron la sesión actual (HTTP {resp.status_code})."}
     except Exception as e:
         return {"valid": False, "expired": False, "message": f"Error de conexión con Zepp Cloud: {str(e)}"}
-
-def clean_region_host(host: str) -> str:
-    """Retorna solo el nombre de host sin scheme (ej. api-mifit-de2.huami.com)."""
-    h = (host or "").strip()
-    h = re.sub(r"^https?://", "", h)
-    return h.split("/")[0] or "api-mifit-de2.huami.com"
 
 def ensure_auth_files_valid():
     """Verifica y normaliza auth.json y credentials.json para cumplir estrictamente el contrato del CLI oficial."""
@@ -514,12 +526,13 @@ async def run_sync_command(mode: str = "incremental", days: Optional[int] = None
                 parsed["needs_reauth"] = False
                 return parsed
             else:
-                err_user_msg = f"Error al sincronizar con Zepp Cloud: {err_text or out_text or huami_check.get('message')}"
-                record_sync_failure(err_user_msg, needs_reauth=False)
+                err_user_msg = huami_check.get("message") or err_text or out_text or "Error al conectar con Zepp Cloud"
+                record_sync_failure(err_user_msg, needs_reauth=True)
                 parsed["success"] = False
                 parsed["outcome"] = "failed"
-                parsed["needs_reauth"] = False
-                parsed["message"] = err_user_msg
+                parsed["needs_reauth"] = True
+                parsed["message"] = f"{err_user_msg}. Por favor, vuelve a iniciar sesión o renueva tu token."
+                parsed["message_code"] = "err.auth.needs_reauth"
                 last_info = get_last_sync_info()
                 parsed["last_cloud_sync_at"] = last_info.get("last_cloud_sync_at")
                 return parsed

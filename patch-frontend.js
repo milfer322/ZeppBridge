@@ -513,6 +513,88 @@ const loadAuthStatus = async () => {
   } catch (e) {}
 };
 
+const cloudStatus = ref<any>(null);
+const showTokenInputs = ref(false);
+const savingToken = ref(false);
+const tokenFeedback = ref<{ ok: boolean; message: string } | null>(null);
+const tokenForm = ref({
+  appToken: '',
+  userId: '',
+  regionHost: 'api-mifit-de2.huami.com'
+});
+
+const loadCloudStatus = async () => {
+  try {
+    const res = await fetch('/api/bridge/get_app_status', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({})
+    });
+    const data = await res.json();
+    if (data) {
+      cloudStatus.value = {
+        configured: Boolean(data.configured),
+        needs_reauth: data.connection_state === 'needs_reauth' || data.auth_state === 'needs_reauth',
+        masked_user_id: data.masked_user_id,
+        region_host: data.region_host,
+        last_sync: data.last_sync
+      };
+      if (data.region_host) {
+        tokenForm.value.regionHost = data.region_host;
+      }
+    }
+  } catch (e) {}
+};
+
+const pasteTokenFromClipboard = async () => {
+  try {
+    if (navigator.clipboard && navigator.clipboard.readText) {
+      const text = await navigator.clipboard.readText();
+      if (text) {
+        tokenForm.value.appToken = text.trim();
+      }
+    }
+  } catch (e) {}
+};
+
+const saveManualToken = async () => {
+  if (!tokenForm.value.appToken.trim() || !tokenForm.value.userId.trim()) {
+    tokenFeedback.value = { ok: false, message: 'Introduce tanto el App Token como el User ID.' };
+    return;
+  }
+  savingToken.value = true;
+  tokenFeedback.value = null;
+  try {
+    const res = await fetch('/api/bridge/manual_auth', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        appToken: tokenForm.value.appToken.trim(),
+        userId: tokenForm.value.userId.trim(),
+        regionHost: tokenForm.value.regionHost
+      })
+    });
+    const data = await res.json();
+    if (data && data.configured) {
+      tokenFeedback.value = { ok: true, message: '✅ Credenciales guardadas con éxito. Conectando con Zepp Cloud...' };
+      await loadCloudStatus();
+      try {
+        await fetch('/api/bridge/start_incremental_sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({})
+        });
+      } catch (e) {}
+    } else {
+      tokenFeedback.value = { ok: false, message: 'No se pudo configurar: ' + (data?.message || 'Error desconocido') };
+    }
+  } catch (err: any) {
+    tokenFeedback.value = { ok: false, message: 'Error de conexión: ' + (err?.message || err) };
+  } finally {
+    savingToken.value = false;
+  }
+};
+
 const handleLogout = async () => {
   if (confirm('¿Estás seguro de que deseas cerrar sesión? Necesitarás tu contraseña y el código 2FA para volver a entrar.')) {
     try {
@@ -525,6 +607,7 @@ const handleLogout = async () => {
 onMounted(() => {
   loadData();
   loadAuthStatus();
+  loadCloudStatus();
 });
 </script>
 
@@ -555,6 +638,109 @@ onMounted(() => {
           <button class="pill-button" type="button" @click="handleLogout" style="background: rgba(239, 68, 68, 0.15); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.35); font-size: 12px; font-weight: 600;">
             🚪 Cerrar Sesión
           </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- SECCIÓN ESTADO DE CONEXIÓN CON ZEPP CLOUD Y RENOVACIÓN DE TOKEN -->
+    <section class="s-section" :style="{
+      border: cloudStatus?.needs_reauth ? '1px solid rgba(239, 68, 68, 0.45)' : '1px solid rgba(16, 185, 129, 0.35)',
+      borderRadius: '12px',
+      padding: '14px 16px',
+      background: cloudStatus?.needs_reauth ? 'rgba(239, 68, 68, 0.05)' : 'rgba(16, 185, 129, 0.04)',
+      marginBottom: '16px'
+    }">
+      <div class="s-section-head">
+        <h3 :style="{ color: cloudStatus?.needs_reauth ? '#ef4444' : '#10b981', display: 'flex', alignItems: 'center', gap: '8px' }">
+          <Icon name="activity" :size="18" /> Estado de Conexión con Zepp Cloud
+        </h3>
+        <p class="s-row-sub" style="margin: 2px 0 0 0;">
+          {{ cloudStatus?.needs_reauth 
+            ? '⚠️ Tu sesión con Zepp Cloud ha caducado. Introduce tu nuevo App Token a continuación o vuelve a iniciar sesión.' 
+            : (cloudStatus?.configured ? 'Conexión activa con los servidores de Zepp Cloud para sincronizar actividades y métricas.' : 'No hay credenciales de Zepp Cloud configuradas.') }}
+        </p>
+      </div>
+
+      <div class="s-list" style="margin-top: 10px;">
+        <div class="s-row">
+          <div class="s-row-main">
+            <span class="s-row-title">Estado del Canal</span>
+            <span class="s-row-sub">
+              {{ cloudStatus?.configured 
+                ? (cloudStatus?.masked_user_id ? 'Usuario: ' + cloudStatus.masked_user_id + ' · Servidor: ' + (cloudStatus.region_host || 'api-mifit-de2.huami.com') : 'Conectado') 
+                : (cloudStatus?.needs_reauth ? 'Sesión caducada · Requiere reautenticación' : 'Sin configurar') }}
+            </span>
+          </div>
+          <div class="s-row-control">
+            <span :style="{
+              background: cloudStatus?.needs_reauth ? 'rgba(239, 68, 68, 0.15)' : (cloudStatus?.configured ? 'rgba(16, 185, 129, 0.15)' : 'rgba(148, 163, 184, 0.15)'),
+              color: cloudStatus?.needs_reauth ? '#ef4444' : (cloudStatus?.configured ? '#10b981' : '#94a3b8'),
+              border: '1px solid ' + (cloudStatus?.needs_reauth ? 'rgba(239, 68, 68, 0.35)' : (cloudStatus?.configured ? 'rgba(16, 185, 129, 0.35)' : 'rgba(148, 163, 184, 0.35)')),
+              fontWeight: '600',
+              padding: '4px 10px',
+              borderRadius: '999px',
+              fontSize: '12px',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '4px'
+            }">
+              {{ cloudStatus?.needs_reauth ? '🔴 Sesión Caducada' : (cloudStatus?.configured ? '🟢 Conectado' : '⚪ Desconectado') }}
+            </span>
+          </div>
+        </div>
+
+        <!-- Formulario para renovar App Token fácilmente -->
+        <div class="s-row is-block" style="padding-top: 10px;">
+          <div style="width: 100%; display: flex; flex-direction: column; gap: 10px;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <strong style="font-size: 13px; color: var(--ink, #fff);">🔑 Renovar o Introducir App Token</strong>
+              <button class="pill-button" type="button" @click="showTokenInputs = !showTokenInputs" style="font-size: 11px; padding: 3px 10px;">
+                {{ showTokenInputs ? 'Ocultar campos' : (cloudStatus?.needs_reauth ? 'Actualizar Token Ahora' : 'Modificar Token') }}
+              </button>
+            </div>
+
+            <div v-if="showTokenInputs || cloudStatus?.needs_reauth" style="display: flex; flex-direction: column; gap: 10px; background: rgba(0, 0, 0, 0.2); padding: 12px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.08);">
+              <div>
+                <label style="display: block; font-size: 12px; color: #94a3b8; margin-bottom: 4px;">App Token de Zepp Cloud:</label>
+                <div style="display: flex; gap: 8px;">
+                  <input v-model="tokenForm.appToken" type="text" placeholder="Pega aquí tu app_token" class="mat-field" style="flex: 1; font-family: monospace; font-size: 12px; padding: 6px 10px;" />
+                  <button class="pill-button" type="button" @click="pasteTokenFromClipboard" title="Pegar del portapapeles" style="font-size: 11px; padding: 6px 10px;">📋 Pegar</button>
+                </div>
+              </div>
+
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+                <div>
+                  <label style="display: block; font-size: 12px; color: #94a3b8; margin-bottom: 4px;">User ID (ID de Usuario):</label>
+                  <input v-model="tokenForm.userId" type="text" placeholder="Ej: 1045678901" class="mat-field" style="width: 100%; font-size: 12px; padding: 6px 10px;" />
+                </div>
+                <div>
+                  <label style="display: block; font-size: 12px; color: #94a3b8; margin-bottom: 4px;">Región / Servidor:</label>
+                  <select v-model="tokenForm.regionHost" class="mat-field" style="width: 100%; font-size: 12px; padding: 6px 10px;">
+                    <option value="api-mifit-de2.huami.com">Europa / España (api-mifit-de2)</option>
+                    <option value="api-mifit-us2.huami.com">Estados Unidos / América (api-mifit-us2)</option>
+                    <option value="api-mifit-sg2.huami.com">Singapur / Asia (api-mifit-sg2)</option>
+                    <option value="api-mifit-ru2.huami.com">Rusia (api-mifit-ru2)</option>
+                    <option value="api-mifit-cn2.huami.com">China (api-mifit-cn2)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div style="display: flex; gap: 10px; align-items: center; margin-top: 4px; flex-wrap: wrap;">
+                <button class="pill-button" type="button" :disabled="savingToken" @click="saveManualToken" style="background: var(--accent, #6dd58c); color: #121316; font-weight: 700; padding: 8px 16px;">
+                  <Icon name="circle-check" :size="14" />
+                  {{ savingToken ? 'Conectando y verificando...' : '💾 Guardar Token y Conectar' }}
+                </button>
+                <a href="#/settings/account" class="pill-button" style="text-decoration: none; font-size: 12px; padding: 8px 12px;">
+                  O ir a Iniciar Sesión Oficial ➔
+                </a>
+              </div>
+
+              <div v-if="tokenFeedback" :class="['alert', tokenFeedback.ok ? 'success' : 'danger']" style="margin-top: 8px;">
+                <Icon :name="tokenFeedback.ok ? 'circle-check' : 'warning'" :size="15" />
+                <span>{{ tokenFeedback.message }}</span>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </section>

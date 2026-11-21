@@ -440,9 +440,11 @@
             });
           } else if (data && !data.success) {
             if (data.needs_reauth || data.message_code === 'err.auth.needs_reauth') {
-              showToast('⚠️ Tu sesión de Zepp Cloud ha caducado. Por favor, ve a Configuración ➔ Cuenta para renovar tu token.', 'error', 9000);
+              showToast('⚠️ Tu sesión de Zepp Cloud ha caducado. Por favor, ve a Configuración ➔ Cuenta para volver a iniciar sesión o renovar tu token.', 'error', 9000);
             } else {
-              showToast('⚠️ Error al sincronizar con Zepp Cloud: ' + (data.message || 'Fallo de conexión'), 'warning', 6000);
+              let cleanMsg = (data.message || 'Fallo de conexión').trim();
+              cleanMsg = cleanMsg.replace(/^(⚠️\s*)?(Error al sincronizar con Zepp Cloud:\s*)+/i, '');
+              showToast('⚠️ Error al sincronizar con Zepp Cloud: ' + cleanMsg, 'warning', 6000);
             }
           }
         } else if (command.includes('sync') && data && data.success) {

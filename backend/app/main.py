@@ -1449,12 +1449,33 @@ async def handle_bridge_command(command: str, request: Request):
         except Exception:
             pass
 
+        off_file = DATA_DIR / "official.json"
+        has_official = False
+        if off_file.exists():
+            try:
+                with open(off_file, "r", encoding="utf-8") as f:
+                    od = json.load(f)
+                    has_official = bool(od.get("tokens") or od.get("access_token"))
+            except Exception:
+                pass
+
+        if needs_reauth:
+            data_source = "none"
+        elif st["configured"] and has_official:
+            data_source = "both"
+        elif st["configured"]:
+            data_source = "legacy"
+        elif has_official:
+            data_source = "official"
+        else:
+            data_source = "none"
+
         return {
-            "configured": st["configured"],
+            "configured": st["configured"] and not needs_reauth,
             "auth_state": auth_state,
             "connection_state": conn_state,
-            "data_source": "both" if st["configured"] else "none",
-            "masked_user_id": st["user_id_masked"] if st["configured"] else None,
+            "data_source": data_source,
+            "masked_user_id": st["user_id_masked"] if (st["configured"] and not needs_reauth) else None,
             "region_host": st["region_host"],
             "region_confidence": "identified" if st["configured"] else "unknown",
             "last_sync": last_cloud_sync_at or (datetime.utcnow().isoformat() + "Z"),
@@ -1502,9 +1523,12 @@ async def handle_bridge_command(command: str, request: Request):
 
     elif command == "get_login_status":
         st = get_auth_status()
+        sync_info = get_last_sync_info()
+        needs_reauth = bool(sync_info.get("needs_reauth", False))
+        is_conn = st["configured"] and not needs_reauth
         return {
-            "state": "connected" if st["configured"] else "idle",
-            "message": "Conectado" if st["configured"] else "",
+            "state": "connected" if is_conn else "idle",
+            "message": "Conectado" if is_conn else ("Sesión caducada" if needs_reauth else ""),
             "page_url": ""
         }
 
@@ -1519,15 +1543,37 @@ async def handle_bridge_command(command: str, request: Request):
         return {"state": "idle", "message": "", "page_url": ""}
 
     elif command == "get_official_status":
-        st = get_auth_status()
+        sync_info = get_last_sync_info()
+        needs_reauth = bool(sync_info.get("needs_reauth", False))
+
+        off_file = DATA_DIR / "official.json"
+        is_official = False
+        off_uid = None
+        if off_file.exists():
+            try:
+                with open(off_file, "r", encoding="utf-8") as f:
+                    off_data = json.load(f)
+                    if off_data.get("tokens") or off_data.get("access_token"):
+                        is_official = True
+                        off_uid = off_data.get("user_id")
+            except Exception:
+                pass
+
+        if needs_reauth:
+            off_state = "reauth" if is_official else "idle"
+        elif is_official:
+            off_state = "connected"
+        else:
+            off_state = "idle"
+
         return {
-            "state": "connected" if st["configured"] else "idle",
-            "message": None,
-            "message_code": None,
-            "user_id_masked": st["user_id_masked"] if st["configured"] else None,
+            "state": off_state,
+            "message": "Sesión oficial caducada" if (is_official and needs_reauth) else None,
+            "message_code": "err.auth.needs_reauth" if (is_official and needs_reauth) else None,
+            "user_id_masked": off_uid if (is_official and not needs_reauth) else None,
             "nickname": None,
             "authorize_url": None,
-            "connected_at": int(datetime.now().timestamp()) if st["configured"] else None
+            "connected_at": int(datetime.now().timestamp()) if (is_official and not needs_reauth) else None
         }
 
     elif command == "start_official_login":
@@ -1542,6 +1588,11 @@ async def handle_bridge_command(command: str, request: Request):
         }
 
     elif command in ("cancel_official_login", "disconnect_official"):
+        if command == "disconnect_official":
+            try:
+                (DATA_DIR / "official.json").unlink(missing_ok=True)
+            except Exception:
+                pass
         return {
             "state": "idle",
             "message": None,
@@ -1557,11 +1608,31 @@ async def handle_bridge_command(command: str, request: Request):
         user_id = body.get("userId", "")
         region_host = clean_region_url(body.get("regionHost", "api-mifit-de2.huami.com"))
         save_credentials(app_token, user_id, region_host)
+        # Limpiar flag de reauth al introducir credenciales frescas
+        try:
+            st_info = get_last_sync_info()
+            st_info["needs_reauth"] = False
+            st_info["last_error"] = None
+            with open(SYNC_STATE_FILE, "w", encoding="utf-8") as f:
+                json.dump(st_info, f, indent=2)
+        except Exception:
+            pass
+
+        off_file = DATA_DIR / "official.json"
+        has_official = False
+        if off_file.exists():
+            try:
+                with open(off_file, "r", encoding="utf-8") as f:
+                    od = json.load(f)
+                    has_official = bool(od.get("tokens") or od.get("access_token"))
+            except Exception:
+                pass
+
         return {
             "configured": True,
             "auth_state": "verified",
             "connection_state": "connected",
-            "data_source": "both",
+            "data_source": "both" if has_official else "legacy",
             "masked_user_id": user_id[:3] + "***" + user_id[-2:] if len(user_id) > 5 else user_id,
             "region_host": clean_region_host(region_host),
             "last_sync": datetime.utcnow().isoformat() + "Z",
@@ -1576,6 +1647,7 @@ async def handle_bridge_command(command: str, request: Request):
         try:
             (DATA_DIR / "auth.json").unlink(missing_ok=True)
             (DATA_DIR / "credentials.json").unlink(missing_ok=True)
+            (DATA_DIR / "official.json").unlink(missing_ok=True)
             if SYNC_STATE_FILE.exists():
                 SYNC_STATE_FILE.unlink(missing_ok=True)
         except Exception:
@@ -1584,6 +1656,7 @@ async def handle_bridge_command(command: str, request: Request):
             "configured": False,
             "auth_state": "unconfigured",
             "connection_state": "unconfigured",
+            "data_source": "none",
             "masked_user_id": None,
             "region_host": "api-mifit-de2.huami.com",
             "compacting": False,
