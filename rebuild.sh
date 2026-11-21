@@ -24,7 +24,7 @@ source .env
 set +a
 PORT="${ZEPP_PORT:-38480}"
 
-TARGET_VERSION="${1:-3.0.2}"
+TARGET_VERSION="${1:-3.2.1}"
 TARGET_VERSION="${TARGET_VERSION#v}"
 
 echo "[-] Deteniendo contenedores anteriores..."
@@ -32,7 +32,7 @@ docker compose down --remove-orphans 2>/dev/null || true
 docker rm -f zeppbridge 2>/dev/null || true
 
 echo "[-] Reconstruyendo contenedor para ZeppBridge v$TARGET_VERSION..."
-docker compose build --build-arg ZEPPBRIDGE_VERSION="$TARGET_VERSION"
+docker compose build --no-cache --build-arg ZEPPBRIDGE_VERSION="$TARGET_VERSION" --build-arg ZEPPBRIDGE_GIT_REF="v$TARGET_VERSION"
 
 echo "[-] Levantando contenedor en el puerto $PORT..."
 docker compose up -d
@@ -48,9 +48,6 @@ done
 
 echo ""
 echo "======================================================"
-echo "     ¡ZeppBridge Web Nativo iniciado con éxito!       "
+echo "  ¡Listo! ZeppBridge está activo en el puerto $PORT"
+echo "  URL de acceso: http://<IP-DE-TU-SERVIDOR>:$PORT"
 echo "======================================================"
-echo ""
-echo "Abre la aplicación en tu navegador:"
-echo "  👉 http://localhost:$PORT"
-echo ""
