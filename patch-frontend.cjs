@@ -2417,7 +2417,7 @@ if (fs.existsSync(maintSectionPath)) {
 }
 
 
-// 27. Botón de descarga directa de series y pesos de fuerza en WorkoutDetail.vue
+// 27. Botón de descarga directa de series y pesos de fuerza en WorkoutDetail.vue y render garantizado en Stage
 const workoutDetailPath = 'src/views/WorkoutDetail.vue';
 if (fs.existsSync(workoutDetailPath)) {
   let wdCode = fs.readFileSync(workoutDetailPath, 'utf8');
@@ -2452,9 +2452,38 @@ const syncStrengthDetail = async () => {
 };`;
     wdCode = wdCode.replace(useWdTarget, syncFnAddition);
 
+    // Asegurar que la tarjeta de fuerza se registre siempre en stageCards aunque aún no tenga series descargadas
+    const stagePutTarget = `  if (series.value?.strength) {
+    put('strength-sets', names['strength-sets']);
+    if (strengthDetail.hasMap.value) put('strength-map', names['strength-map']);
+  }`;
+    const stagePutReplacement = `  if (series.value?.strength || sport.value === 'strength' || String((workout.value as any)?.workout_type) === '52' || workout.value?.effective_type === 'strength') {
+    put('strength-sets', names['strength-sets']);
+    if (strengthDetail.hasMap.value) put('strength-map', names['strength-map']);
+  }`;
+    wdCode = wdCode.replace(stagePutTarget, stagePutReplacement);
+
+    // Reemplazar la ranura de template de fuerza para mostrar estado vacío con botón cuando aún no hay series
+    const templateTarget = '<template #strength-sets><WorkoutStrengthCard v-if="series?.strength" :strength="series.strength" :detail="strengthDetail" /></template>';
+    const templateReplacement = `<template #strength-sets>
+          <div v-if="!series?.strength?.sets?.length" class="strength-empty-card" style="padding: 24px; background: rgba(30, 41, 59, 0.7); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 12px; margin-bottom: 16px; text-align: center;">
+            <h3 style="margin: 0 0 8px; font-size: 16px; color: #fff; display: flex; align-items: center; justify-content: center; gap: 8px;">
+              <Icon name="activity" :size="18" /> Series y Pesos de Fuerza
+            </h3>
+            <p style="margin: 0 0 16px; font-size: 14px; color: var(--muted, #94a3b8); line-height: 1.5; max-width: 520px; margin-left: auto; margin-right: auto;">
+              Las repeticiones, cargas en kg y grupos musculares de este entrenamiento aún no se han sincronizado desde Zepp Cloud.
+            </p>
+            <button class="pill-button" type="button" :disabled="syncingStrength" @click="syncStrengthDetail" style="background: var(--accent, #0ea5e9); color: #fff; font-weight: 600; padding: 10px 22px; border: none; border-radius: 8px; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; font-size: 14px; box-shadow: 0 2px 10px rgba(14, 165, 233, 0.4);">
+              <Icon name="refresh" :size="16" />
+              {{ syncingStrength ? 'Descargando series desde la nube...' : '🏋️ Descargar Series y Pesos Ahora' }}
+            </button>
+          </div>
+          <WorkoutStrengthCard v-if="series?.strength" :strength="series.strength" :detail="strengthDetail" />
+        </template>`;
+    wdCode = wdCode.replace(templateTarget, templateReplacement);
+
     const hintTarget = '<p v-if="workout.effective_type === \'strength\' && !series?.strength?.sets?.length" class="footnote">{{ tools.strengthHint }}</p>';
-    const buttonAddition = `<p v-if="workout.effective_type === 'strength' && !series?.strength?.sets?.length" class="footnote">{{ tools.strengthHint }}</p>
-          <div v-if="workout.effective_type === 'strength' && !series?.strength?.sets?.length" class="strength-backfill-prompt" style="margin: 12px 0 16px; padding: 14px 18px; background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 10px; display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap;">
+    const buttonAddition = `<div v-if="(workout.effective_type === 'strength' || String(workout.workout_type) === '52' || sport === 'strength') && !series?.strength?.sets?.length" class="strength-backfill-prompt" style="margin: 12px 0 16px; padding: 14px 18px; background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 10px; display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap;">
             <div style="flex: 1; min-width: 250px;">
               <strong style="color: var(--ink, #fff); font-size: 14px; display: flex; align-items: center; gap: 6px;">
                 <Icon name="activity" :size="16" /> ¿Aún no ves las series ni los pesos de este entrenamiento?
@@ -2470,7 +2499,32 @@ const syncStrengthDetail = async () => {
           </div>`;
     wdCode = wdCode.replace(hintTarget, buttonAddition);
     fs.writeFileSync(workoutDetailPath, wdCode, 'utf8');
-    console.log('[Patch] Botón de descarga de series y pesos añadido en WorkoutDetail.vue');
+    console.log('[Patch] Botón y ranura de series y pesos añadidos en WorkoutDetail.vue');
+  }
+}
+
+// 28. Asegurar que Stage Manager mantenga las tarjetas de fuerza en el escenario principal en prefs.ts
+const prefsPath = 'src/lib/stage/prefs.ts';
+if (fs.existsSync(prefsPath)) {
+  let prCode = fs.readFileSync(prefsPath, 'utf8');
+  if (!prCode.includes('strength-sets')) {
+    prCode = prCode.replace(
+      "if (hasStrength || /strength|weight|gym/.test(name)) return 'strength';",
+      "if (hasStrength || /strength|weight|gym|52/.test(name)) return 'strength';"
+    );
+    const sanTarget = "for (const id of cards) if (!seen.has(id)) { seen.add(id); strip.push({ ids: [id], snap: 0 }); }";
+    const sanReplacement = `for (const id of cards) if (!seen.has(id)) { seen.add(id); strip.push({ ids: [id], snap: 0 }); }
+  if (cls === 'strength') {
+    if (cards.includes('strength-sets') && !stageIds.includes('strength-sets')) {
+      stageIds.push('strength-sets');
+    }
+    if (cards.includes('strength-map') && !stageIds.includes('strength-map') && stageIds.length < 3) {
+      stageIds.push('strength-map');
+    }
+  }`;
+    prCode = prCode.replace(sanTarget, sanReplacement);
+    fs.writeFileSync(prefsPath, prCode, 'utf8');
+    console.log('[Patch] Stage Manager configurado para mantener tarjetas de fuerza visibles en prefs.ts');
   }
 }
 

@@ -114,6 +114,7 @@ def ensure_columns(conn: sqlite3.Connection, table_name: str, columns: List[tupl
             if col_name not in existing:
                 try:
                     cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN {col_name} {col_type};")
+                    conn.commit()
                     print(f"[DB] Columna '{col_name}' añadida con éxito a '{table_name}'")
                 except Exception as ce:
                     print(f"[DB] Aviso al añadir columna '{col_name}' a '{table_name}': {ce}")

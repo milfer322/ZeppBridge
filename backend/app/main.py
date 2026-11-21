@@ -12,6 +12,7 @@ import urllib.error
 import subprocess
 import httpx
 import math
+import traceback
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, Any, List, Optional
@@ -364,6 +365,34 @@ def save_json_file(filename: str, data: Any):
     with open(p, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
 
+ZEPP_SPORT_CODE_MAP = {
+    1: "run",
+    2: "treadmill",
+    3: "walking",
+    4: "ride",
+    5: "free_training",
+    6: "walking",
+    7: "trail_running",
+    8: "treadmill",
+    9: "ride",
+    10: "indoor_cycling",
+    12: "elliptical",
+    13: "hiking",
+    14: "pool_swimming",
+    16: "free_training",
+    17: "tennis",
+    21: "jump_rope",
+    22: "hiking",
+    23: "rowing",
+    24: "indoor_fitness",
+    52: "strength",
+    108: "stair_climbing",
+    211: "road_cycling",
+    216: "padel",
+    224: "hiking",
+    225: "rucking"
+}
+
 def normalize_workout_dict(r: Any, type_overrides: Optional[Dict[str, Any]] = None, feels: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     if not r:
         return {}
@@ -382,8 +411,24 @@ def normalize_workout_dict(r: Any, type_overrides: Optional[Dict[str, Any]] = No
 
     orig_type = d.get("workout_type") or d.get("effective_type") or "workout"
     d["workout_type"] = orig_type
-    d["effective_type"] = user_override if user_override else orig_type
-    d["normalized_type"] = d.get("normalized_type") or orig_type
+
+    # Detección rigurosa de entrenamientos de fuerza (código 52 de Zepp OS o series existentes)
+    is_strength = (
+        str(orig_type).lower() in ("52", "strength") or
+        str(d.get("zepp_type") or "").lower() in ("52", "strength") or
+        (d.get("strength_total_sets") is not None and int(d.get("strength_total_sets") or 0) > 0)
+    )
+
+    if is_strength:
+        sport_key = "strength"
+    elif str(orig_type).isdigit():
+        sport_key = ZEPP_SPORT_CODE_MAP.get(int(orig_type), str(orig_type))
+    else:
+        sport_key = orig_type
+
+    d["effective_type"] = user_override if user_override else sport_key
+    d["display_type"] = d["effective_type"]
+    d["normalized_type"] = user_override if user_override else sport_key
     d["type_source"] = "user_override" if user_override else (d.get("workout_type_source") or d.get("type_source") or "numeric_mapped")
 
     # 2. Duration seconds & moving seconds
@@ -948,6 +993,53 @@ STRENGTH_ACTION_CATALOG: Dict[int, tuple] = {
     130: ("bicycle_crunch", "core"),
 }
 
+def ensure_strength_schema():
+    """Garantiza que la tabla de series de fuerza y las columnas en workouts existan en SQLite."""
+    conn = get_db_write_connection()
+    if not conn:
+        return
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS workout_strength_sets (
+                workout_id TEXT NOT NULL,
+                set_index INTEGER NOT NULL,
+                action_code INTEGER NOT NULL,
+                exercise_key TEXT,
+                muscle_group TEXT,
+                reps INTEGER NOT NULL,
+                weight_value REAL,
+                weight_unit TEXT NOT NULL CHECK(weight_unit IN ('kg', 'lb')),
+                weight_kg REAL,
+                duration_ms INTEGER,
+                avg_hr INTEGER,
+                calories_kcal REAL,
+                PRIMARY KEY (workout_id, set_index)
+            )
+        """)
+        cursor = conn.cursor()
+        cursor.execute("PRAGMA table_info(workouts)")
+        cols = {row[1] for row in cursor.fetchall()}
+        for col, typ in [
+            ("strength_total_sets", "INTEGER"),
+            ("strength_total_reps", "INTEGER"),
+            ("strength_rest_seconds", "INTEGER"),
+            ("strength_groups_json", "TEXT")
+        ]:
+            if col not in cols:
+                try:
+                    cursor.execute(f"ALTER TABLE workouts ADD COLUMN {col} {typ};")
+                    conn.commit()
+                except Exception:
+                    pass
+        conn.commit()
+    except Exception as e:
+        print(f"[DB] Error en ensure_strength_schema: {e}")
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
 def parse_strength_sets_from_lap(lap_text: str, workout_id: str) -> List[Dict[str, Any]]:
     if not lap_text or not isinstance(lap_text, str):
         return []
@@ -1012,11 +1104,15 @@ def parse_strength_sets_from_lap(lap_text: str, workout_id: str) -> List[Dict[st
         elif sec_int > 0 and sec_int <= 3600:
             duration_ms = sec_int * 1000
 
-        avg_hr = get_int(11) if len(cols) > 11 else None
-        if avg_hr is not None and (avg_hr <= 0 or avg_hr > 255):
-            avg_hr = None
+        avg_hr = get_int(4) if len(cols) > 4 else None
+        if avg_hr is None or avg_hr <= 0 or avg_hr > 255:
+            avg_hr = get_int(11) if len(cols) > 11 else None
+            if avg_hr is not None and (avg_hr <= 0 or avg_hr > 255):
+                avg_hr = None
 
-        calories_raw = get_float(14) if len(cols) > 14 else None
+        calories_raw = get_float(15) if len(cols) > 15 else None
+        if calories_raw is None or calories_raw < 0:
+            calories_raw = get_float(14) if len(cols) > 14 else None
         calories_kcal = round(calories_raw, 1) if calories_raw is not None and calories_raw >= 0 else None
 
         ex_key, m_group = STRENGTH_ACTION_CATALOG.get(action_code, (None, None))
@@ -1041,28 +1137,17 @@ def parse_strength_sets_from_lap(lap_text: str, workout_id: str) -> List[Dict[st
 
 async def fetch_and_store_strength_workout(wid: str) -> bool:
     """Descarga e inserta las series de fuerza para un entrenamiento de forma directa y garantizada."""
-    conn = get_db_connection()
+    ensure_strength_schema()
+    conn = get_db_write_connection()
     if not conn:
+        print("[StrengthSync] No se pudo obtener conexión de escritura a la BD")
         return False
     try:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS workout_strength_sets (
-                workout_id TEXT NOT NULL,
-                set_index INTEGER NOT NULL,
-                action_code INTEGER NOT NULL,
-                exercise_key TEXT,
-                muscle_group TEXT,
-                reps INTEGER NOT NULL,
-                weight_value REAL,
-                weight_unit TEXT NOT NULL,
-                weight_kg REAL,
-                duration_ms INTEGER,
-                avg_hr INTEGER,
-                calories_kcal REAL
-            )
-        """)
-        conn.execute("UPDATE workouts SET zepp_source = 'run.huami.com' WHERE workout_id = ? AND (zepp_source IS NULL OR TRIM(zepp_source) = '')", (wid,))
-        conn.commit()
+        try:
+            conn.execute("UPDATE workouts SET zepp_source = 'run.huami.com' WHERE workout_id = ? AND (zepp_source IS NULL OR TRIM(zepp_source) = '')", (wid,))
+            conn.commit()
+        except Exception:
+            pass
 
         # 1. Intentar buscar si el payload ya existe en raw_records
         data = None
@@ -1108,13 +1193,13 @@ async def fetch_and_store_strength_workout(wid: str) -> bool:
                 "timezone": "UTC"
             }
 
-            w = conn.execute("SELECT zepp_source FROM workouts WHERE workout_id = ?", (wid,)).fetchone()
-            sources_to_try = []
-            if w and w["zepp_source"]:
-                sources_to_try.append(w["zepp_source"])
-            for s in ("run.huami.com", "huami", "official", "run.mifit.huami.com", "run.gps"):
-                if s not in sources_to_try:
-                    sources_to_try.append(s)
+            sources_to_try = ["run.huami.com", "huami", "official", "run.mifit.huami.com", "run.gps"]
+            try:
+                w = conn.execute("SELECT zepp_source FROM workouts WHERE workout_id = ?", (wid,)).fetchone()
+                if w and w["zepp_source"] and w["zepp_source"] not in sources_to_try:
+                    sources_to_try.insert(0, w["zepp_source"])
+            except Exception:
+                pass
 
             for src in sources_to_try:
                 url = f"https://{region_host}/v1/sport/run/detail.json"
@@ -1179,7 +1264,7 @@ async def fetch_and_store_strength_workout(wid: str) -> bool:
             conn.execute("DELETE FROM workout_strength_sets WHERE workout_id = ?", (wid,))
             for s in sets:
                 conn.execute(
-                    """INSERT INTO workout_strength_sets
+                    """INSERT OR REPLACE INTO workout_strength_sets
                        (workout_id, set_index, action_code, exercise_key, muscle_group, reps, weight_value, weight_unit, weight_kg, duration_ms, avg_hr, calories_kcal)
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (s["workout_id"], s["set_index"], s["action_code"], s["exercise_key"], s["muscle_group"],
@@ -1198,10 +1283,13 @@ async def fetch_and_store_strength_workout(wid: str) -> bool:
 
             tot_sets = len(sets)
             tot_reps = sum(s["reps"] for s in sets)
-            conn.execute(
-                "UPDATE workouts SET strength_total_sets = ?, strength_total_reps = ? WHERE workout_id = ?",
-                (tot_sets, tot_reps, wid)
-            )
+            try:
+                conn.execute(
+                    "UPDATE workouts SET strength_total_sets = ?, strength_total_reps = ? WHERE workout_id = ?",
+                    (tot_sets, tot_reps, wid)
+                )
+            except Exception as ue:
+                print(f"[StrengthSync] Aviso actualizando workouts: {ue}")
             conn.commit()
             print(f"[StrengthSync] Guardadas {len(sets)} series de fuerza para {wid}")
             return True
@@ -1214,7 +1302,10 @@ async def fetch_and_store_strength_workout(wid: str) -> bool:
         print(f"[StrengthSync] Excepción al descargar fuerza: {e}")
         return False
     finally:
-        conn.close()
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 # ==============================================================================
 # DISPATCHER CENTRAL: /api/bridge/{command}
@@ -5691,9 +5782,10 @@ async def handle_bridge_command(command: str, request: Request):
                         pass
 
                     # 1. Ejecutar descarga directa para los entrenamientos de fuerza
+                    ensure_strength_schema()
                     strength_workouts = query_all(
                         "SELECT workout_id FROM workouts "
-                        "WHERE workout_type IN ('52', 'strength') OR workout_type_override = 'strength' OR (strength_total_sets IS NOT NULL AND strength_total_sets > 0) "
+                        "WHERE workout_type IN ('52', 'strength') OR workout_type_override = 'strength' "
                         "ORDER BY start_time DESC LIMIT ?",
                         (max_records,)
                     )
@@ -6114,95 +6206,150 @@ def get_sync_log():
     return "Aún no se ha registrado ninguna sincronización en sync.log."
 
 @app.get("/api/bridge/debug_strength")
-async def debug_strength_endpoint(workout_id: Optional[str] = None):
+async def debug_strength_endpoint(workout_id: Optional[str] = None, download: Optional[bool] = False):
     """Diagnóstico en vivo para inspeccionar entrenamientos de fuerza, tablas y llamadas cloud."""
-    conn = get_db_connection()
-    if not conn:
-        return {"error": "No database connection"}
-    
-    st = get_auth_status()
-    user_id = st.get("user_id")
-    token = get_stored_token(user_id)
-    region_host = clean_region_host(st.get("region_host") or "api-mifit-de2.huami.com")
-    
-    if workout_id:
-        target = conn.execute("SELECT * FROM workouts WHERE workout_id = ?", (workout_id,)).fetchone()
-    else:
-        target = conn.execute("SELECT * FROM workouts WHERE workout_type IN ('52', 'strength') OR workout_type_override = 'strength' OR (strength_total_sets IS NOT NULL AND strength_total_sets > 0) ORDER BY start_time DESC LIMIT 1").fetchone()
-    
-    if not target:
-        latest = conn.execute("SELECT workout_id, workout_type, start_time, duration_seconds FROM workouts ORDER BY start_time DESC LIMIT 5").fetchall()
-        return {
-            "error": "No strength workout found in workouts table",
-            "auth_status": st,
-            "has_token": bool(token),
-            "latest_workouts": [dict(r) for r in latest] if latest else []
-        }
-    
-    wid = str(target["workout_id"])
-    target_dict = dict(target)
-    
-    s_rows = conn.execute("SELECT * FROM workout_strength_sets WHERE workout_id = ? ORDER BY set_index ASC", (wid,)).fetchall()
-    raw_row = conn.execute("SELECT id, stream, source_key, length(payload) as payload_len, substr(payload, 1, 300) as preview, created_at FROM raw_records WHERE source_key LIKE ? OR payload LIKE ?", (f"%{wid}%", f"%{wid}%")).fetchall()
-    
-    cloud_result = {}
-    if token:
-        headers = {
-            "apptoken": token,
-            "appname": "com.huami.midong",
-            "appplatform": "ios_phone",
-            "accept": "*/*",
-            "v": "2.0",
-            "vn": "10.2.5",
-            "cv": "1722_10.2.5",
-            "vb": "202604132257",
-            "lang": "es",
-            "timezone": "UTC"
-        }
-        sources = ["run.huami.com", "huami", "official", "run.mifit.huami.com"]
-        for src in sources:
-            url = f"https://{region_host}/v1/sport/run/detail.json"
-            try:
-                async with httpx.AsyncClient(timeout=10.0) as client:
-                    resp = await client.get(url, params={"trackid": wid, "source": src}, headers=headers)
-                    cloud_result[src] = {
-                        "status": resp.status_code,
-                        "length": len(resp.text),
-                        "snippet": resp.text[:400]
-                    }
-                    if resp.status_code == 200:
-                        try:
-                            rj = resp.json()
-                            pl = rj.get("data") if isinstance(rj, dict) and isinstance(rj.get("data"), (dict, str)) else rj
-                            if isinstance(pl, str):
-                                try:
-                                    pl = json.loads(pl)
-                                except Exception:
-                                    pass
-                            cloud_result[src]["keys"] = list(pl.keys()) if isinstance(pl, dict) else type(pl).__name__
-                            if isinstance(pl, dict) and pl.get("lap"):
-                                cloud_result[src]["lap_preview"] = str(pl["lap"])[:300]
-                                cloud_result[src]["lap_rows_count"] = len(str(pl["lap"]).split(";"))
-                                cloud_result[src]["first_row_cols_count"] = len(str(pl["lap"]).split(";")[0].split(","))
-                                parsed_test = parse_strength_sets_from_lap(pl["lap"], wid)
-                                cloud_result[src]["parsed_sets_count"] = len(parsed_test)
-                                if parsed_test:
-                                    cloud_result[src]["first_set"] = parsed_test[0]
-                        except Exception as pe:
-                            cloud_result[src]["parse_error"] = str(pe)
-            except Exception as e:
-                cloud_result[src] = {"error": str(e)}
+    conn = None
+    try:
+        ensure_strength_schema()
+        conn = get_db_connection()
+        if not conn:
+            return {"error": "No database connection"}
 
-    return {
-        "workout_id": wid,
-        "workout": target_dict,
-        "existing_sets_count": len(s_rows),
-        "existing_sets": [dict(r) for r in s_rows],
-        "raw_records_matches": [dict(r) for r in raw_row] if raw_row else [],
-        "cloud_checks": cloud_result,
-        "auth": st,
-        "has_token": bool(token)
-    }
+        st = get_auth_status()
+        user_id = st.get("user_id")
+        token = get_stored_token(user_id)
+        region_host = clean_region_host(st.get("region_host") or "api-mifit-de2.huami.com")
+
+        # Inspección de esquema SQLite
+        tables = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+        w_cols = [r[1] for r in conn.execute("PRAGMA table_info(workouts)").fetchall()] if "workouts" in tables else []
+
+        target = None
+        if workout_id:
+            target = conn.execute("SELECT * FROM workouts WHERE workout_id = ?", (workout_id,)).fetchone()
+        else:
+            where_clauses = ["workout_type IN ('52', 'strength')", "workout_type_override = 'strength'"]
+            if "strength_total_sets" in w_cols:
+                where_clauses.append("(strength_total_sets IS NOT NULL AND strength_total_sets > 0)")
+            q = f"SELECT * FROM workouts WHERE {' OR '.join(where_clauses)} ORDER BY start_time DESC LIMIT 1"
+            try:
+                target = conn.execute(q).fetchone()
+            except Exception:
+                target = conn.execute("SELECT * FROM workouts ORDER BY start_time DESC LIMIT 1").fetchone()
+
+        if not target:
+            latest = conn.execute("SELECT workout_id, workout_type, start_time, duration_seconds FROM workouts ORDER BY start_time DESC LIMIT 5").fetchall() if "workouts" in tables else []
+            return {
+                "error": "No workout found in workouts table",
+                "tables": tables,
+                "workouts_columns": w_cols,
+                "auth_status": st,
+                "has_token": bool(token),
+                "latest_workouts": [dict(r) for r in latest] if latest else []
+            }
+
+        wid = str(target["workout_id"])
+        target_dict = dict(target)
+
+        download_executed = False
+        download_result = None
+        if download:
+            download_result = await fetch_and_store_strength_workout(wid)
+            download_executed = True
+            try:
+                refreshed = conn.execute("SELECT * FROM workouts WHERE workout_id = ?", (wid,)).fetchone()
+                if refreshed:
+                    target_dict = dict(refreshed)
+            except Exception:
+                pass
+
+        s_rows = []
+        if "workout_strength_sets" in tables:
+            try:
+                s_rows = conn.execute("SELECT * FROM workout_strength_sets WHERE workout_id = ? ORDER BY set_index ASC", (wid,)).fetchall()
+            except Exception:
+                s_rows = []
+
+        raw_row = []
+        if "raw_records" in tables:
+            try:
+                raw_row = conn.execute("SELECT id, stream, source_key, length(payload) as payload_len, substr(payload, 1, 300) as preview, created_at FROM raw_records WHERE source_key LIKE ? OR payload LIKE ?", (f"%{wid}%", f"%{wid}%")).fetchall()
+            except Exception:
+                raw_row = []
+
+        cloud_result = {}
+        if token:
+            headers = {
+                "apptoken": token,
+                "appname": "com.huami.midong",
+                "appplatform": "ios_phone",
+                "accept": "*/*",
+                "v": "2.0",
+                "vn": "10.2.5",
+                "cv": "1722_10.2.5",
+                "vb": "202604132257",
+                "lang": "es",
+                "timezone": "UTC"
+            }
+            sources = ["run.huami.com", "huami", "official", "run.mifit.huami.com"]
+            for src in sources:
+                url = f"https://{region_host}/v1/sport/run/detail.json"
+                try:
+                    async with httpx.AsyncClient(timeout=10.0) as client:
+                        resp = await client.get(url, params={"trackid": wid, "source": src}, headers=headers)
+                        cloud_result[src] = {
+                            "status": resp.status_code,
+                            "length": len(resp.text),
+                            "snippet": resp.text[:400]
+                        }
+                        if resp.status_code == 200:
+                            try:
+                                rj = resp.json()
+                                pl = rj.get("data") if isinstance(rj, dict) and isinstance(rj.get("data"), (dict, str)) else rj
+                                if isinstance(pl, str):
+                                    try:
+                                        pl = json.loads(pl)
+                                    except Exception:
+                                        pass
+                                cloud_result[src]["keys"] = list(pl.keys()) if isinstance(pl, dict) else type(pl).__name__
+                                if isinstance(pl, dict) and pl.get("lap"):
+                                    cloud_result[src]["lap_preview"] = str(pl["lap"])[:300]
+                                    cloud_result[src]["lap_rows_count"] = len(str(pl["lap"]).split(";"))
+                                    cloud_result[src]["first_row_cols_count"] = len(str(pl["lap"]).split(";")[0].split(","))
+                                    parsed_test = parse_strength_sets_from_lap(pl["lap"], wid)
+                                    cloud_result[src]["parsed_sets_count"] = len(parsed_test)
+                                    if parsed_test:
+                                        cloud_result[src]["first_set"] = parsed_test[0]
+                            except Exception as pe:
+                                cloud_result[src]["parse_error"] = str(pe)
+                except Exception as e:
+                    cloud_result[src] = {"error": str(e)}
+
+        return {
+            "workout_id": wid,
+            "download_executed": download_executed,
+            "download_result": download_result,
+            "tables": tables,
+            "workouts_columns": w_cols,
+            "workout": target_dict,
+            "existing_sets_count": len(s_rows),
+            "existing_sets": [dict(r) for r in s_rows],
+            "raw_records_matches": [dict(r) for r in raw_row] if raw_row else [],
+            "cloud_checks": cloud_result,
+            "auth": st,
+            "has_token": bool(token)
+        }
+    except Exception as e:
+        return {
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }
+    finally:
+        try:
+            if conn:
+                conn.close()
+        except Exception:
+            pass
 
 # ==============================================================================
 # Configuración Custom, Sincronización Automática, Telegram y Gemini
