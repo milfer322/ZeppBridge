@@ -2054,22 +2054,22 @@ const weeklyChartOption = computed(() => {`;
 
         <div class="apnea-stats-grid">
           <div class="apnea-stat-item">
-            <span class="stat-label">Índice ODI <span class="tech-info-badge" data-tooltip="ODI · Oxygen Desaturation Index: Promedio de caídas de oxígeno ≥ 3% por hora de sueño. < 5 normal, 5–14 leve, 15–29 moderada, ≥ 30 severa." title="ODI · Oxygen Desaturation Index: Promedio de caídas de oxígeno ≥ 3% por hora de sueño. < 5 normal, 5–14 leve, 15–29 moderada, ≥ 30 severa.">i</span></span>
+            <span class="stat-label">Índice ODI <span class="tech-info-badge" data-tooltip="ODI · Oxygen Desaturation Index: Promedio de caídas de oxígeno ≥ 3% por hora de sueño. < 5 normal, 5–14 leve, 15–29 moderada, ≥ 30 severa." aria-label="Información técnica sobre ODI">i</span></span>
             <strong class="stat-value">{{ (breathing.odi !== null && breathing.odi !== undefined) ? breathing.odi : '—' }} <small v-if="breathing.odi !== null">/h</small></strong>
             <span class="stat-desc">Desaturaciones O₂ por hora</span>
           </div>
           <div class="apnea-stat-item">
-            <span class="stat-label">Puntuación Respiratoria <span class="tech-info-badge" data-tooltip="Puntuación SomnusCare (0–100): Evalúa la regularidad y oxigenación respiratoria durante la noche." title="Puntuación SomnusCare (0–100): Evalúa la regularidad y oxigenación respiratoria durante la noche.">i</span></span>
+            <span class="stat-label">Puntuación Respiratoria <span class="tech-info-badge" data-tooltip="Puntuación SomnusCare (0–100): Evalúa la regularidad y oxigenación respiratoria durante la noche." aria-label="Información técnica sobre Puntuación Respiratoria">i</span></span>
             <strong class="stat-value">{{ (breathing.score !== null && breathing.score !== undefined) ? breathing.score : '—' }} <small v-if="breathing.score !== null">/ 100</small></strong>
             <span class="stat-desc">Calidad calculada por el reloj</span>
           </div>
           <div class="apnea-stat-item">
-            <span class="stat-label">Eventos Totales O₂ <span class="tech-info-badge" data-tooltip="Eventos Totales O₂: Número absoluto de episodios nocturnos con caídas detectadas en la saturación de oxígeno." title="Eventos Totales O₂: Número absoluto de episodios nocturnos con caídas detectadas en la saturación de oxígeno.">i</span></span>
+            <span class="stat-label">Eventos Totales O₂ <span class="tech-info-badge" data-tooltip="Eventos Totales O₂: Número absoluto de episodios nocturnos con caídas detectadas en la saturación de oxígeno." aria-label="Información técnica sobre Eventos Totales O2">i</span></span>
             <strong class="stat-value">{{ (breathing.events !== null && breathing.events !== undefined) ? breathing.events : '—' }}</strong>
             <span class="stat-desc">Caídas registradas de SpO₂</span>
           </div>
           <div class="apnea-stat-item">
-            <span class="stat-label">Aceleraciones FC <span class="tech-info-badge" data-tooltip="Microdespertares / Arousals autonómicos: Subidas repentinas de frecuencia cardíaca (≥ 8 ppm) asociadas a reactivación tras un descenso de oxígeno." title="Microdespertares / Arousals autonómicos: Subidas repentinas de frecuencia cardíaca (≥ 8 ppm).">i</span></span>
+            <span class="stat-label">Aceleraciones FC <span class="tech-info-badge" data-tooltip="Microdespertares / Arousals autonómicos: Subidas repentinas de frecuencia cardíaca (≥ 8 ppm) asociadas a reactivación tras un descenso de oxígeno." aria-label="Información técnica sobre Aceleraciones FC">i</span></span>
             <strong class="stat-value">{{ (breathing.hr_spikes !== null && breathing.hr_spikes !== undefined) ? breathing.hr_spikes : '0' }} <small>(~{{ breathing.hr_spike_index }}/h)</small></strong>
             <span class="stat-desc">Saltos súbitos ≥8 ppm en reposo</span>
           </div>
@@ -2305,7 +2305,7 @@ const techTooltip = computed(() => {
     mtcCode = mtcCode.replace(mtcScriptTarget, mtcScriptAddition + '\n' + mtcScriptTarget);
     mtcCode = mtcCode.replace(
       '<strong class="trend-title">{{ label }}</strong>',
-      '<strong class="trend-title">{{ label }}<span v-if="techTooltip" class="tech-info-badge" :data-tooltip="techTooltip" :title="techTooltip" aria-label="Información técnica">i</span></strong>'
+      '<strong class="trend-title">{{ label }}<span v-if="techTooltip" class="tech-info-badge" :data-tooltip="techTooltip" :aria-label="techTooltip">i</span></strong>'
     );
     fs.writeFileSync(metricTrendCardPath, mtcCode, 'utf8');
     console.log('[Patch] Insignias informativas "i" añadidas en MetricTrendCard.vue');

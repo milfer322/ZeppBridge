@@ -1240,6 +1240,16 @@
     window.addEventListener('DOMContentLoaded', injectTechBadgeStyles);
   }
 
+  // Suprimir el tooltip nativo duplicado del navegador en las insignias informativas "i"
+  if (typeof document !== 'undefined') {
+    document.addEventListener('mouseover', (e) => {
+      const badge = e.target && e.target.closest && e.target.closest('.tech-info-badge');
+      if (badge && badge.hasAttribute('title')) {
+        badge.removeAttribute('title');
+      }
+    }, true);
+  }
+
   // Observador debounced para no saturar la navegación ni el bucle de eventos de Vue
   let observerDebounceTimer = null;
   const observer = new MutationObserver(() => {
