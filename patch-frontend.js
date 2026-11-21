@@ -2482,24 +2482,9 @@ const syncStrengthDetail = async () => {
         </template>`;
     wdCode = wdCode.replace(templateTarget, templateReplacement);
 
-    const hintTarget = '<p v-if="workout.effective_type === \'strength\' && !series?.strength?.sets?.length" class="footnote">{{ tools.strengthHint }}</p>';
-    const buttonAddition = `<div v-if="(workout.effective_type === 'strength' || String(workout.workout_type) === '52' || sport === 'strength') && !series?.strength?.sets?.length" class="strength-backfill-prompt" style="margin: 12px 0 16px; padding: 14px 18px; background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 10px; display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap;">
-            <div style="flex: 1; min-width: 250px;">
-              <strong style="color: var(--ink, #fff); font-size: 14px; display: flex; align-items: center; gap: 6px;">
-                <Icon name="activity" :size="16" /> ¿Aún no ves las series ni los pesos de este entrenamiento?
-              </strong>
-              <p style="margin: 4px 0 0; font-size: 13px; color: var(--muted, #94a3b8); line-height: 1.4;">
-                Las repeticiones por serie, ejercicios y pesos en kg se descargan desde el informe de Zepp Cloud. Pulsa el botón para descargarlos ahora.
-              </p>
-            </div>
-            <button class="pill-button" type="button" :disabled="syncingStrength" @click="syncStrengthDetail" style="background: var(--accent, #0ea5e9); color: #fff; font-weight: 600; padding: 8px 18px; border: none; border-radius: 8px; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; box-shadow: 0 2px 8px rgba(14, 165, 233, 0.3);">
-              <Icon name="refresh" :size="15" />
-              {{ syncingStrength ? 'Descargando series...' : '🏋️ Descargar Series y Pesos Ahora' }}
-            </button>
-          </div>`;
-    wdCode = wdCode.replace(hintTarget, buttonAddition);
+    // Mantener la tarjeta principal de fuerza en el escenario con su botón único (sin duplicados en la cabecera)
     fs.writeFileSync(workoutDetailPath, wdCode, 'utf8');
-    console.log('[Patch] Botón y ranura de series y pesos añadidos en WorkoutDetail.vue');
+    console.log('[Patch] Ranura y tarjeta principal de series y pesos añadidas en WorkoutDetail.vue');
   }
 }
 

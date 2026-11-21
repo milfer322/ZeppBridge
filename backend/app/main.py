@@ -1048,7 +1048,7 @@ def parse_strength_sets_from_lap(lap_text: str, workout_id: str) -> List[Dict[st
     rows = [r.strip() for r in lap_text.split(";") if r.strip()]
     for row in rows:
         cols = row.split(",")
-        if len(cols) < 20:
+        if len(cols) < 4:
             continue
         try:
             int(cols[0].strip())
@@ -1075,17 +1075,33 @@ def parse_strength_sets_from_lap(lap_text: str, workout_id: str) -> List[Dict[st
                     pass
             return None
 
-        action_code = get_int(28) if len(cols) > 28 else None
-        reps = get_int(22) if len(cols) > 22 else None
-        unit_code = get_int(23) if len(cols) > 23 else 0
-        weight_raw = get_float(21) if len(cols) > 21 else None
-        ms_raw = get_int(43) if len(cols) > 43 else -1
+        action_code = None
+        reps = None
+        unit_code = 0
+        weight_raw = None
+        ms_raw = -1
         sec_int = get_int(1) if len(cols) > 1 else -1
+
+        if len(cols) >= 29:
+            action_code = get_int(28)
+            reps = get_int(22)
+            unit_code = get_int(23) or 0
+            weight_raw = get_float(21)
+            ms_raw = get_int(43) or -1
+        elif len(cols) >= 20:
+            action_code = get_int(18) or get_int(19) or get_int(0)
+            reps = get_int(14) or get_int(16)
+            unit_code = get_int(15) or 0
+            weight_raw = get_float(13) or get_float(15)
+        elif len(cols) >= 10:
+            action_code = get_int(8) or get_int(9) or get_int(0)
+            reps = get_int(4) or get_int(5)
+            weight_raw = get_float(3) or get_float(6)
 
         if (action_code is None or action_code < 0) and (reps is None or reps == 0) and (weight_raw is None or weight_raw <= 0):
             continue
 
-        action_code = action_code if action_code is not None else -1
+        action_code = action_code if action_code is not None else 0
         reps = reps if reps is not None else 0
         weight_unit = "lb" if unit_code == 1 else "kg"
         
@@ -1149,26 +1165,58 @@ async def fetch_and_store_strength_workout(wid: str) -> bool:
         except Exception:
             pass
 
-        # 1. Intentar buscar si el payload ya existe en raw_records
+        # 1. Intentar buscar si el payload ya existe en raw_records (tanto en payload como en payload_zip comprimido)
         data = None
+        w_rec = None
         try:
-            raw_row = conn.execute(
-                "SELECT payload FROM raw_records WHERE source_key LIKE ? OR source_key LIKE ? ORDER BY created_at DESC LIMIT 1",
+            w_rec = conn.execute("SELECT raw_record_id, zepp_source FROM workouts WHERE workout_id = ?", (wid,)).fetchone()
+        except Exception:
+            pass
+
+        raw_candidates = []
+        try:
+            if w_rec and w_rec["raw_record_id"]:
+                r = conn.execute("SELECT id, stream, source_key, payload, payload_zip FROM raw_records WHERE id = ?", (w_rec["raw_record_id"],)).fetchone()
+                if r:
+                    raw_candidates.append(r)
+
+            r_more = conn.execute(
+                "SELECT id, stream, source_key, payload, payload_zip FROM raw_records WHERE source_key LIKE ? OR source_key LIKE ? ORDER BY id DESC LIMIT 5",
                 (f"workout_detail:{wid}:%", f"%{wid}%")
-            ).fetchone()
-            if raw_row and raw_row["payload"]:
-                raw_json = json.loads(raw_row["payload"])
-                pl = raw_json.get("data") if isinstance(raw_json, dict) and isinstance(raw_json.get("data"), (dict, str)) else raw_json
-                if isinstance(pl, str):
-                    try:
-                        pl = json.loads(pl)
-                    except Exception:
-                        pass
-                if isinstance(pl, dict) and (pl.get("lap") or pl.get("strengthSets") or pl.get("strength_sets")):
-                    data = pl
-                    print(f"[StrengthSync] Encontrado detalle en raw_records local para {wid}")
+            ).fetchall()
+            for r in r_more:
+                if not any(c["id"] == r["id"] for c in raw_candidates):
+                    raw_candidates.append(r)
         except Exception as e:
             print(f"[StrengthSync] Error leyendo raw_records local: {e}")
+
+        for rc in raw_candidates:
+            payload_str = rc["payload"]
+            if not payload_str and rc.get("payload_zip"):
+                try:
+                    import gzip
+                    payload_str = gzip.decompress(rc["payload_zip"]).decode("utf-8")
+                except Exception:
+                    try:
+                        import zlib
+                        payload_str = zlib.decompress(rc["payload_zip"]).decode("utf-8")
+                    except Exception:
+                        pass
+            if payload_str:
+                try:
+                    raw_json = json.loads(payload_str)
+                    pl = raw_json.get("data") if isinstance(raw_json, dict) and isinstance(raw_json.get("data"), (dict, str)) else raw_json
+                    if isinstance(pl, str):
+                        try:
+                            pl = json.loads(pl)
+                        except Exception:
+                            pass
+                    if isinstance(pl, dict) and (pl.get("lap") or pl.get("strengthSets") or pl.get("strength_sets") or pl.get("strengthAssess")):
+                        data = pl
+                        print(f"[StrengthSync] Encontrado detalle en raw_records local (id {rc['id']}) para {wid}")
+                        break
+                except Exception:
+                    pass
 
         # 2. Si no estaba en raw_records, descargar desde la API de Zepp Cloud
         if not data:
@@ -1193,18 +1241,18 @@ async def fetch_and_store_strength_workout(wid: str) -> bool:
                 "timezone": "UTC"
             }
 
-            sources_to_try = ["run.huami.com", "huami", "official", "run.mifit.huami.com", "run.gps"]
-            try:
-                w = conn.execute("SELECT zepp_source FROM workouts WHERE workout_id = ?", (wid,)).fetchone()
-                if w and w["zepp_source"] and w["zepp_source"] not in sources_to_try:
-                    sources_to_try.insert(0, w["zepp_source"])
-            except Exception:
-                pass
+            sources_to_try = []
+            if w_rec and w_rec["zepp_source"]:
+                sources_to_try.append(w_rec["zepp_source"])
+            for s in ["run.11141377.huami.com", "run.huami.com", "huami", "official", "run.mifit.huami.com", "run.gps"]:
+                if s not in sources_to_try:
+                    sources_to_try.append(s)
 
             for src in sources_to_try:
                 url = f"https://{region_host}/v1/sport/run/detail.json"
                 try:
                     async with httpx.AsyncClient(timeout=15.0) as client:
+                        # Intento 1: trackid + source
                         resp = await client.get(url, params={"trackid": str(wid), "source": src}, headers=headers)
                         print(f"[StrengthSync] HTTP {resp.status_code} desde {src} para {wid}")
                         if resp.status_code == 200:
@@ -1219,6 +1267,22 @@ async def fetch_and_store_strength_workout(wid: str) -> bool:
                                 data = pl
                                 print(f"[StrengthSync] Detalle obtenido con éxito desde {src} para {wid}")
                                 break
+
+                        # Intento 2: trackid + source + userid
+                        if user_id:
+                            resp2 = await client.get(url, params={"trackid": str(wid), "source": src, "userid": str(user_id)}, headers=headers)
+                            if resp2.status_code == 200:
+                                rj2 = resp2.json()
+                                pl2 = rj2.get("data") if isinstance(rj2, dict) and isinstance(rj2.get("data"), (dict, str)) else rj2
+                                if isinstance(pl2, str):
+                                    try:
+                                        pl2 = json.loads(pl2)
+                                    except Exception:
+                                        pass
+                                if isinstance(pl2, dict) and (pl2.get("lap") or pl2.get("strengthSets") or pl2.get("strength_sets") or pl2.get("strengthAssess")):
+                                    data = pl2
+                                    print(f"[StrengthSync] Detalle obtenido con éxito con userid desde {src} para {wid}")
+                                    break
                 except Exception as e:
                     print(f"[StrengthSync] Error consultando {src}: {e}")
 
@@ -6206,7 +6270,11 @@ def get_sync_log():
     return "Aún no se ha registrado ninguna sincronización en sync.log."
 
 @app.get("/api/bridge/debug_strength")
-async def debug_strength_endpoint(workout_id: Optional[str] = None, download: Optional[bool] = False):
+async def debug_strength_endpoint(
+    workout_id: Optional[str] = None,
+    download: Optional[bool] = False,
+    mock_sample: Optional[bool] = False
+):
     """Diagnóstico en vivo para inspeccionar entrenamientos de fuerza, tablas y llamadas cloud."""
     conn = None
     try:
@@ -6251,6 +6319,26 @@ async def debug_strength_endpoint(workout_id: Optional[str] = None, download: Op
         wid = str(target["workout_id"])
         target_dict = dict(target)
 
+        if mock_sample:
+            # Inyección de series de prueba realistas para verificar inmediatamente el renderizado en UI y mapa muscular
+            sample_sets = [
+                {"workout_id": wid, "set_index": 1, "action_code": 30, "exercise_key": "dumbbell_bench_press", "muscle_group": "chest", "reps": 12, "weight_value": 24.0, "weight_unit": "kg", "weight_kg": 24.0, "duration_ms": 45000, "avg_hr": 122, "calories_kcal": 18.5},
+                {"workout_id": wid, "set_index": 2, "action_code": 3, "exercise_key": "barbell_squats", "muscle_group": "legs", "reps": 10, "weight_value": 60.0, "weight_unit": "kg", "weight_kg": 60.0, "duration_ms": 50000, "avg_hr": 135, "calories_kcal": 24.0},
+                {"workout_id": wid, "set_index": 3, "action_code": 17, "exercise_key": "bent_over_dumbbell_row", "muscle_group": "back", "reps": 12, "weight_value": 20.0, "weight_unit": "kg", "weight_kg": 20.0, "duration_ms": 42000, "avg_hr": 128, "calories_kcal": 17.0},
+                {"workout_id": wid, "set_index": 4, "action_code": 40, "exercise_key": "dumbbell_lateral_raise", "muscle_group": "shoulders", "reps": 15, "weight_value": 10.0, "weight_unit": "kg", "weight_kg": 10.0, "duration_ms": 38000, "avg_hr": 118, "calories_kcal": 12.0}
+            ]
+            conn.execute("DELETE FROM workout_strength_sets WHERE workout_id = ?", (wid,))
+            for s in sample_sets:
+                conn.execute(
+                    """INSERT OR REPLACE INTO workout_strength_sets
+                       (workout_id, set_index, action_code, exercise_key, muscle_group, reps, weight_value, weight_unit, weight_kg, duration_ms, avg_hr, calories_kcal)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (s["workout_id"], s["set_index"], s["action_code"], s["exercise_key"], s["muscle_group"],
+                     s["reps"], s["weight_value"], s["weight_unit"], s["weight_kg"], s["duration_ms"], s["avg_hr"], s["calories_kcal"])
+                )
+            conn.execute("UPDATE workouts SET strength_total_sets = 4, strength_total_reps = 49 WHERE workout_id = ?", (wid,))
+            conn.commit()
+
         download_executed = False
         download_result = None
         if download:
@@ -6270,12 +6358,61 @@ async def debug_strength_endpoint(workout_id: Optional[str] = None, download: Op
             except Exception:
                 s_rows = []
 
+        # Inspección del registro raw vinculado por raw_record_id (descomprimiendo payload_zip si aplica)
+        raw_rec_info = None
+        if target.get("raw_record_id"):
+            try:
+                r_rec = conn.execute("SELECT id, stream, source_key, length(payload) as payload_len, length(payload_zip) as payload_zip_len, payload, payload_zip, created_at FROM raw_records WHERE id = ?", (target["raw_record_id"],)).fetchone()
+                if r_rec:
+                    r_dict = dict(r_rec)
+                    pl_str = r_dict.pop("payload", None)
+                    pl_zip = r_dict.pop("payload_zip", None)
+                    if not pl_str and pl_zip:
+                        try:
+                            import gzip
+                            pl_str = gzip.decompress(pl_zip).decode("utf-8")
+                            r_dict["decompressed_via"] = "gzip"
+                        except Exception:
+                            try:
+                                import zlib
+                                pl_str = zlib.decompress(pl_zip).decode("utf-8")
+                                r_dict["decompressed_via"] = "zlib"
+                            except Exception:
+                                r_dict["decompression_error"] = True
+                    if pl_str:
+                        r_dict["decompressed_length"] = len(pl_str)
+                        r_dict["decompressed_preview"] = pl_str[:300]
+                        try:
+                            pj = json.loads(pl_str)
+                            if isinstance(pj, dict):
+                                r_dict["parsed_keys"] = list(pj.keys())
+                                if pj.get("lap"):
+                                    r_dict["has_lap"] = True
+                                    r_dict["lap_preview"] = str(pj["lap"])[:200]
+                                if pj.get("data") and isinstance(pj["data"], dict):
+                                    r_dict["data_keys"] = list(pj["data"].keys())
+                                    if pj["data"].get("lap"):
+                                        r_dict["has_lap"] = True
+                                        r_dict["lap_preview"] = str(pj["data"]["lap"])[:200]
+                        except Exception as pe:
+                            r_dict["json_parse_error"] = str(pe)
+                    raw_rec_info = r_dict
+            except Exception as e_rr:
+                raw_rec_info = {"error": str(e_rr)}
+
         raw_row = []
         if "raw_records" in tables:
             try:
-                raw_row = conn.execute("SELECT id, stream, source_key, length(payload) as payload_len, substr(payload, 1, 300) as preview, created_at FROM raw_records WHERE source_key LIKE ? OR payload LIKE ?", (f"%{wid}%", f"%{wid}%")).fetchall()
+                raw_row = conn.execute("SELECT id, stream, source_key, length(payload) as payload_len, length(payload_zip) as payload_zip_len, substr(payload, 1, 300) as preview, created_at FROM raw_records WHERE source_key LIKE ? OR source_key LIKE ? ORDER BY id DESC LIMIT 5", (f"workout_detail:{wid}:%", f"%{wid}%")).fetchall()
             except Exception:
                 raw_row = []
+
+        w_laps = []
+        if "workout_laps" in tables:
+            try:
+                w_laps = [dict(r) for r in conn.execute("SELECT * FROM workout_laps WHERE workout_id = ? ORDER BY lap_index ASC", (wid,)).fetchall()]
+            except Exception:
+                pass
 
         cloud_result = {}
         if token:
@@ -6291,7 +6428,13 @@ async def debug_strength_endpoint(workout_id: Optional[str] = None, download: Op
                 "lang": "es",
                 "timezone": "UTC"
             }
-            sources = ["run.huami.com", "huami", "official", "run.mifit.huami.com"]
+            sources = []
+            if target.get("zepp_source"):
+                sources.append(target["zepp_source"])
+            for s in ["run.11141377.huami.com", "run.huami.com", "huami", "official", "run.mifit.huami.com"]:
+                if s not in sources:
+                    sources.append(s)
+
             for src in sources:
                 url = f"https://{region_host}/v1/sport/run/detail.json"
                 try:
@@ -6325,8 +6468,38 @@ async def debug_strength_endpoint(workout_id: Optional[str] = None, download: Op
                 except Exception as e:
                     cloud_result[src] = {"error": str(e)}
 
+                if user_id:
+                    k_uid = f"{src}+uid"
+                    try:
+                        async with httpx.AsyncClient(timeout=10.0) as client:
+                            resp_u = await client.get(url, params={"trackid": wid, "source": src, "userid": str(user_id)}, headers=headers)
+                            cloud_result[k_uid] = {
+                                "status": resp_u.status_code,
+                                "length": len(resp_u.text),
+                                "snippet": resp_u.text[:400]
+                            }
+                            if resp_u.status_code == 200:
+                                try:
+                                    rj_u = resp_u.json()
+                                    pl_u = rj_u.get("data") if isinstance(rj_u, dict) and isinstance(rj_u.get("data"), (dict, str)) else rj_u
+                                    if isinstance(pl_u, str):
+                                        try:
+                                            pl_u = json.loads(pl_u)
+                                        except Exception:
+                                            pass
+                                    cloud_result[k_uid]["keys"] = list(pl_u.keys()) if isinstance(pl_u, dict) else type(pl_u).__name__
+                                    if isinstance(pl_u, dict) and pl_u.get("lap"):
+                                        cloud_result[k_uid]["lap_preview"] = str(pl_u["lap"])[:300]
+                                        parsed_test_u = parse_strength_sets_from_lap(pl_u["lap"], wid)
+                                        cloud_result[k_uid]["parsed_sets_count"] = len(parsed_test_u)
+                                except Exception:
+                                    pass
+                    except Exception as e:
+                        cloud_result[k_uid] = {"error": str(e)}
+
         return {
             "workout_id": wid,
+            "mock_sample_applied": bool(mock_sample),
             "download_executed": download_executed,
             "download_result": download_result,
             "tables": tables,
@@ -6334,7 +6507,9 @@ async def debug_strength_endpoint(workout_id: Optional[str] = None, download: Op
             "workout": target_dict,
             "existing_sets_count": len(s_rows),
             "existing_sets": [dict(r) for r in s_rows],
+            "raw_record_linked": raw_rec_info,
             "raw_records_matches": [dict(r) for r in raw_row] if raw_row else [],
+            "workout_laps": w_laps,
             "cloud_checks": cloud_result,
             "auth": st,
             "has_token": bool(token)

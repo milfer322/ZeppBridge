@@ -1242,7 +1242,24 @@
 
   // Suprimir el tooltip nativo duplicado del navegador en las insignias informativas "i"
   if (typeof document !== 'undefined') {
+    const stripBadgeTitles = () => {
+      try {
+        const badges = document.querySelectorAll('.tech-info-badge[title]');
+        badges.forEach(b => b.removeAttribute('title'));
+      } catch (e) {}
+    };
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', stripBadgeTitles);
+    } else {
+      stripBadgeTitles();
+    }
     document.addEventListener('mouseover', (e) => {
+      const badge = e.target && e.target.closest && e.target.closest('.tech-info-badge');
+      if (badge && badge.hasAttribute('title')) {
+        badge.removeAttribute('title');
+      }
+    }, true);
+    document.addEventListener('pointerenter', (e) => {
       const badge = e.target && e.target.closest && e.target.closest('.tech-info-badge');
       if (badge && badge.hasAttribute('title')) {
         badge.removeAttribute('title');
