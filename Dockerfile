@@ -3,8 +3,8 @@
 # ==============================================================================
 FROM node:22-bookworm-slim AS frontend-builder
 
-ARG ZEPPBRIDGE_VERSION=3.2.1
-ARG ZEPPBRIDGE_GIT_REF=v3.2.1
+ARG ZEPPBRIDGE_VERSION=3.3.0
+ARG ZEPPBRIDGE_GIT_REF=main
 
 WORKDIR /src
 
@@ -13,6 +13,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends git ca-certific
 
 # Clonar el tag oficial del repositorio o rama principal
 RUN git clone --depth 1 --branch "${ZEPPBRIDGE_GIT_REF}" https://github.com/lingcang728/ZeppBridge.git /src || \
+    git clone --depth 1 --branch "v${ZEPPBRIDGE_VERSION}" https://github.com/lingcang728/ZeppBridge.git /src || \
     git clone --depth 1 https://github.com/lingcang728/ZeppBridge.git /src
 
 # Asegurar carpeta public/ y copiar el conector web y parche de frontend
@@ -37,7 +38,7 @@ FROM python:3.11-slim-bookworm
 LABEL maintainer="antigravity"
 LABEL description="ZeppBridge Web Nativo - Frontend oficial desacoplado con FastAPI y CLI oficial"
 
-ARG ZEPPBRIDGE_VERSION=3.2.1
+ARG ZEPPBRIDGE_VERSION=3.3.0
 
 WORKDIR /app
 
@@ -52,11 +53,12 @@ RUN set -eux && \
         tzdata \
         libsqlite3-0 \
         libssl3 && \
-    # Descargar zeppbridge-tools oficial (CLI y MCP en Rust compilado)
+    # Descargar zeppbridge-tools oficial (CLI y MCP en Rust compilado) con fallback seguro
     TEMP_DIR=$(mktemp -d) && \
     cd "$TEMP_DIR" && \
     (curl -fsSL -o tools.zip "https://github.com/lingcang728/ZeppBridge/releases/download/v${ZEPPBRIDGE_VERSION}/zeppbridge-tools-${ZEPPBRIDGE_VERSION}-Linux-x64.zip" || \
-     curl -fsSL -o tools.zip "https://github.com/lingcang728/ZeppBridge/releases/download/v${ZEPPBRIDGE_VERSION}/zeppbridge-tools-${ZEPPBRIDGE_VERSION}-x86_64-unknown-linux-gnu.zip") && \
+     curl -fsSL -o tools.zip "https://github.com/lingcang728/ZeppBridge/releases/download/v${ZEPPBRIDGE_VERSION}/zeppbridge-tools-${ZEPPBRIDGE_VERSION}-x86_64-unknown-linux-gnu.zip" || \
+     curl -fsSL -o tools.zip "https://github.com/lingcang728/ZeppBridge/releases/download/v3.2.1/zeppbridge-tools-3.2.1-Linux-x64.zip") && \
     unzip -q tools.zip -d /usr/local/bin/ && \
     chmod +x /usr/local/bin/zeppbridge-* && \
     rm -rf "$TEMP_DIR" && \
@@ -80,6 +82,7 @@ COPY --from=frontend-builder /src/src/assets/devices/catalog.json /app/catalog.j
 ENV ZEPPBRIDGE_DATA_DIR=/data \
     ZEPPBRIDGE_CREDENTIAL_STORE=env \
     ZEPPBRIDGE_CLI_BIN=/usr/local/bin/zeppbridge-cli \
+    ZEPPBRIDGE_VERSION=${ZEPPBRIDGE_VERSION} \
     PYTHONUNBUFFERED=1
 
 # Volumen para persistencia de la base de datos zepp.db, auth.json y credenciales

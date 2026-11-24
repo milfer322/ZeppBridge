@@ -1875,8 +1875,8 @@ const backfillOfferPath = 'src/components/BackfillOffer.vue';
 if (fs.existsSync(backfillOfferPath)) {
   let boCode = fs.readFileSync(backfillOfferPath, 'utf8');
   boCode = boCode.replace(
-    '<button type="button" class="pill-button quiet" @click="offer.dismiss()">{{ t.later }}</button>\n    </template>',
-    '<button type="button" class="pill-button quiet" @click="offer.dismiss()">{{ t.later }}</button>\n    </template>\n    <template v-else>\n      <button type="button" class="pill-button quiet" @click="offer.dismiss()">OK</button>\n    </template>'
+    /(<button\s+type="button"\s+class="pill-button\s+quiet"\s+@click="offer\.dismiss\(\)">\{\{\s*t\.later\s*\}\}<\/button>\s*)(<\/template>)/,
+    `$1$2\n    <template v-else>\n      <button type="button" class="pill-button quiet" @click="offer.dismiss()">OK</button>\n    </template>`
   );
   fs.writeFileSync(backfillOfferPath, boCode, 'utf8');
   console.log('[Patch] Boton de descarte en BackfillOffer.vue mejorado');

@@ -45,7 +45,8 @@ from .zepp_cli import (
     record_successful_sync
 )
 
-app = FastAPI(title="ZeppBridge Web Native", version="3.2.1")
+APP_VERSION = os.getenv("ZEPPBRIDGE_VERSION", "3.3.0")
+app = FastAPI(title="ZeppBridge Web Native", version=APP_VERSION)
 
 # Middleware de compresión GZIP para acelerar carga web de frontend y respuestas JSON
 app.add_middleware(
@@ -1454,7 +1455,7 @@ async def handle_bridge_command(command: str, request: Request):
 
 
     elif command in ("plugin:app|version", "plugin:app|get_version", "app_version"):
-        return "3.2.0"
+        return APP_VERSION
 
     elif command in ("plugin:app|name", "plugin:app|get_name", "app_name"):
         return "ZeppBridge"
@@ -1465,7 +1466,7 @@ async def handle_bridge_command(command: str, request: Request):
     elif command in ("update_view", "update_start", "check_update"):
         return {
             "phase": "up_to_date",
-            "version": "3.2.0",
+            "version": APP_VERSION,
             "notes": None,
             "date": None,
             "downloaded": 0,
@@ -1474,6 +1475,9 @@ async def handle_bridge_command(command: str, request: Request):
             "portable": False,
             "error_code": None
         }
+
+    elif command in ("autostart_state", "set_autostart"):
+        return {"enabled": False, "tray_only": False, "stale": False}
 
     elif command == "update_apply":
         return True
