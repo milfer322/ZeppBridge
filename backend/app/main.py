@@ -1479,6 +1479,28 @@ async def handle_bridge_command(command: str, request: Request):
     elif command in ("autostart_state", "set_autostart"):
         return {"enabled": False, "tray_only": False, "stale": False}
 
+    elif command == "sleep_journal_prompt":
+        return None
+
+    elif command == "sleep_journal_list":
+        return []
+
+    elif command == "sleep_journal_save":
+        input_data = args.get("input", {})
+        return {
+            "date": input_data.get("date", ""),
+            "behaviors": input_data.get("behaviors", []),
+            "mood": input_data.get("mood"),
+            "source": "local",
+            "updated_at": datetime.now().isoformat()
+        }
+
+    elif command in ("sleep_journal_dismiss", "sleep_journal_snooze"):
+        return True
+
+    elif command == "sleep_journal_factors":
+        return None
+
     elif command == "update_apply":
         return True
 

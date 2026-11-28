@@ -4,7 +4,7 @@
 FROM node:22-bookworm-slim AS frontend-builder
 
 ARG ZEPPBRIDGE_VERSION=3.3.0
-ARG ZEPPBRIDGE_GIT_REF=main
+ARG ZEPPBRIDGE_GIT_REF=v3.3.0
 
 WORKDIR /src
 

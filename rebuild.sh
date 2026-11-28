@@ -26,14 +26,7 @@ PORT="${ZEPP_PORT:-38480}"
 
 TARGET_VERSION="${1:-3.3.0}"
 TARGET_VERSION="${TARGET_VERSION#v}"
-GIT_REF="${2:-}"
-if [ -z "$GIT_REF" ]; then
-    if [ "$TARGET_VERSION" = "3.3.0" ]; then
-        GIT_REF="main"
-    else
-        GIT_REF="v$TARGET_VERSION"
-    fi
-fi
+GIT_REF="${2:-v$TARGET_VERSION}"
 
 echo "[-] Deteniendo contenedores anteriores..."
 docker compose down --remove-orphans 2>/dev/null || true
